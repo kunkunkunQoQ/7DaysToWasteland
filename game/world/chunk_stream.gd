@@ -3,6 +3,7 @@ extends Node3D
 
 const SIZE := WastelandTerrainGen.SIZE
 const CONCURRENT := 3
+const GUEST_RADIUS := 2
 
 class BuildJob:
 	extends RefCounted
@@ -39,6 +40,7 @@ var jobs: Dictionary = {}
 var dirty: Dictionary = {}
 var nav_inflight: Array[NavigationMesh] = []
 var center := Vector2i(-99999, -99999)
+var guest_centers: Array[Vector2i]=[]
 var ready_for_streaming := false
 var is_preview := false
 var loot_day := 1
@@ -67,15 +69,23 @@ func prime(p: Vector3) -> void:
 	ready_for_streaming = true
 	_queue_neighborhood()
 
-func refresh(at: Vector3, next_radius: int) -> void:
+func refresh(at: Vector3, next_radius: int, guests:Array[Vector3]=[]) -> void:
 	var new_cell := WastelandTerrainGen.chunk_at(Vector2(at.x, at.z))
-	if new_cell != center or radius != next_radius:
+	var next_centers:Array[Vector2i]=[]
+	for point:Vector3 in guests:
+		var cell:=WastelandTerrainGen.chunk_at(Vector2(point.x,point.z))
+		if cell!=new_cell and not next_centers.has(cell): next_centers.append(cell)
+	if new_cell!=center or radius!=next_radius or next_centers!=guest_centers:
 		radius = next_radius
 		center = new_cell
+		guest_centers=next_centers
 		_queue_neighborhood()
 	if not is_preview:
-		for offset in [Vector2i.ZERO,Vector2i.LEFT,Vector2i.RIGHT,Vector2i.UP,Vector2i.DOWN]:
-			discovered[WastelandTerrainGen.grid_key(center + offset)] = true
+		var observers:Array[Vector2i]=[center]
+		observers.append_array(guest_centers)
+		for cell:Vector2i in observers:
+			for offset in [Vector2i.ZERO,Vector2i.LEFT,Vector2i.RIGHT,Vector2i.UP,Vector2i.DOWN]:
+				discovered[WastelandTerrainGen.grid_key(cell+offset)]=true
 
 func ensure_landing(at: Vector3) -> void:
 	var loc := WastelandTerrainGen.chunk_at(Vector2(at.x,at.z))
@@ -97,12 +107,12 @@ func ensure_landing(at: Vector3) -> void:
 
 func _queue_neighborhood() -> void:
 	queued.clear()
-	for z in range(-radius, radius + 1):
-		for x in range(-radius, radius + 1):
-			var cell := center + Vector2i(x, z)
-			if not active.has(cell) and not jobs.has(cell):
-				queued.append(cell)
-	queued.sort_custom(func(a: Vector2i, b: Vector2i): return (a - center).length_squared() < (b - center).length_squared())
+	var wanted: Dictionary={}
+	_queue_around(wanted,center,radius)
+	for loc:Vector2i in guest_centers: _queue_around(wanted,loc,GUEST_RADIUS)
+	for cell:Vector2i in wanted:
+		if not active.has(cell) and not jobs.has(cell): queued.append(cell)
+	queued.sort_custom(func(a:Vector2i,b:Vector2i):return wanted[a]<wanted[b])
 	for coord in active.keys():
 		if not _inside(coord, radius + 1):
 			chunk_unloaded.emit(coord)
@@ -111,9 +121,20 @@ func _queue_neighborhood() -> void:
 			nav_dirty.erase(coord)
 			dirty.erase(coord)
 
+func _queue_around(wanted:Dictionary,loc:Vector2i,extent:int)->void:
+	for z in range(-extent,extent+1):
+		for x in range(-extent,extent+1):
+			var cell:=loc+Vector2i(x,z)
+			var distance:=x*x+z*z
+			wanted[cell]=mini(int(wanted.get(cell,distance)),distance)
+
 func _inside(cell: Vector2i, extent: int) -> bool:
 	var offset := (cell - center).abs()
-	return maxi(offset.x, offset.y) <= extent
+	if maxi(offset.x,offset.y)<=extent: return true
+	for loc:Vector2i in guest_centers:
+		offset=(cell-loc).abs()
+		if maxi(offset.x,offset.y)<=GUEST_RADIUS+extent-radius: return true
+	return false
 
 func _process(_delta: float) -> void:
 	if not ready_for_streaming:

@@ -236,10 +236,10 @@ func _process(delta: float) -> void:
 	var eyes: Array[Vector3] = [session.player.global_position]
 	var network: Node = session.network
 	if is_instance_valid(network):
-		if is_instance_valid(network.member) and not network.member_dead:
-			eyes.append(network.member.global_position)
-		elif is_instance_valid(network.host_avatar) and network.host_avatar.visible:
-			eyes.append(network.host_avatar.global_position)
+		if network.server():
+			eyes.append_array(session.guest_positions())
+		elif session.replica:
+			eyes.append_array(network.replica_positions())
 	var nearby := false
 	for patch in habitats:
 		var nearest := eyes[0]

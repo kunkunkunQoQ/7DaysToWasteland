@@ -259,9 +259,9 @@ func host() -> void:
 	s.hordes.next_herd = INF
 	s.simulation_paused = false
 	if not check(app.network.listen(port) == OK, "sapling authority listens on ENet"): return
-	if not check(await until(func(): return is_instance_valid(app.network.member)), "guest joins authority"): return
-	app.network.member.global_position = feet
-	app.network.member.velocity = Vector3.ZERO
+	if not check(await until(func(): return not app.network.joined_members().is_empty()), "guest joins authority"): return
+	app.network.joined_members()[0].survivor.global_position = feet
+	app.network.joined_members()[0].survivor.velocity = Vector3.ZERO
 	s.ui_command("marker", [Vector2(point.x, point.z), "plant-here"])
 	if not check(await until(func(): return is_instance_valid(plant_body(NETWORK_MODEL))), "guest main-hand press plants on authority"): return
 	if not check(s.bag.count(item) == 1 and rows().size() == 1 and s.bag.active == 1, "authority charges one shared item and preserves host's selected slot"): return
@@ -272,7 +272,7 @@ func host() -> void:
 	mark("cycle-done")
 	if not check(await until(func(): return marked("rejoined-fir")), "returning guest observes the same frost fir"): return
 	mark("rejoin-done")
-	await until(func(): return not is_instance_valid(app.network.member), 8000)
+	await until(func(): return app.network.joined_members().is_empty(), 8000)
 
 func guest() -> void:
 	app.network.local_token = Crypto.new().generate_random_bytes(16).hex_encode()

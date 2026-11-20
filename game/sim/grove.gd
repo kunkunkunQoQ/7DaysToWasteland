@@ -44,7 +44,7 @@ func plant(model: String, point: Vector3) -> bool:
 		"pose":Transform3D(shape,chunk.to_local(point)),"planted_at":session.clock.hours,
 		"soil_offset":session.stream.excavation_at(Vector2(point.x,point.z))}
 	sync_chunk(cell)
-	if is_instance_valid(session.network): session.network.slow_timer = 0.0
+	if is_instance_valid(session.network): session.network.invalidate_world()
 	return true
 
 func _progress(row: Dictionary) -> float:
@@ -73,7 +73,7 @@ func uproot(body: StaticBody3D) -> void:
 	rows.erase(id)
 	sync_chunk(cell)
 	session.drop_materials(chunk.to_global(row.pose.origin)+Vector3.UP*0.18,{"sapling_"+str(row.model):1})
-	if is_instance_valid(session.network): session.network.slow_timer = 0.0
+	if is_instance_valid(session.network): session.network.invalidate_world()
 
 func tick(dt: float) -> void:
 	if growing_chunks.is_empty(): return

@@ -43,6 +43,9 @@ func _host() -> void:
 	session.hordes.next_herd=1000.0
 	session.bag.add("cloth",9)
 	session.bag.add("frame",2)
+	# Automatic shortcuts now assign new items; reserve slot 0 for the bare-hand test.
+	session.bag.assign("cloth",5)
+	session.bag.assign("frame",6)
 	var animal_at := session.player.global_position + Vector3(-4, 0, -8)
 	animal_at.y = session.stream.ground_at(animal_at) + 0.15
 	session.hordes._spawn("fox", animal_at, false, {"morph":"local"})
@@ -52,19 +55,19 @@ func _host() -> void:
 		field.y=session.stream.ground_at(field)+0.15
 		session.hordes._spawn("hare",field,false,{})
 	_check(game.network.listen(port)==OK,"loopback host opens")
-	if not await _until(func(): return is_instance_valid(game.network.member) and is_instance_valid(game.network.member_avatar),10.0):
+	if not await _until(func(): return not game.network.joined_members().is_empty() and is_instance_valid(game.network.joined_members()[0].avatar),10.0):
 		_check(false,"guest handshake")
 		_done()
 		return
 	_check(true,"guest handshake")
-	var initial:Vector3=game.network.member.global_position
-	_check(_overhead(game.network.member_avatar,"鹿溪","surveyor"),"joining guest displays its nickname alongside the character name")
-	_check(await _until(func(): return game.network.member_avatar.outfit == "surveyor", 4.0), "host sees guest's chosen surveyor outfit")
+	var initial:Vector3=game.network.joined_members()[0].survivor.global_position
+	_check(_overhead(game.network.joined_members()[0].avatar,"鹿溪","surveyor"),"joining guest displays its nickname alongside the character name")
+	_check(await _until(func(): return game.network.joined_members()[0].avatar.outfit == "surveyor", 4.0), "host sees guest's chosen surveyor outfit")
 	_check(game.options.appearance == "ferryman", "guest joins without replacing host's appearance")
-	_check(session.player.max_health() == 105.0 and game.network.member.max_health() == 90.0 and game.network.member.max_stamina() == 120.0, "host simulates distinct character capacities")
-	var guest_avatar: WastelandPartyAvatar = game.network.member_avatar
+	_check(session.player.max_health() == 105.0 and game.network.joined_members()[0].survivor.max_health() == 90.0 and game.network.joined_members()[0].survivor.max_stamina() == 120.0, "host simulates distinct character capacities")
+	var guest_avatar: WastelandPartyAvatar = game.network.joined_members()[0].avatar
 	_check(await _until(func(): return guest_avatar.action_kind=="punch" and guest_avatar.get_meta("swings",0)==1,4.0), "host sees one guest punch on the third-person avatar")
-	_check(game.network.member.hand.model_id=="" and game.network.member.hand.swing_serial==1, "guest punched with a genuinely empty hand")
+	_check(game.network.joined_members()[0].survivor.hand.model_id=="" and game.network.joined_members()[0].survivor.hand.swing_serial==1, "guest punched with a genuinely empty hand")
 	session.bag.add("stone_axe",1)
 	session.bag.assign("stone_axe",2)
 	session.bag.active=2
@@ -72,11 +75,11 @@ func _host() -> void:
 	Input.action_press("fire")
 	_check(await _until(func(): return session.player.hand.swing_serial==1,2.0),"host attack input swings the selected axe")
 	Input.action_release("fire")
-	_check(await _until(func(): return game.network.member.crouch > 0.7, 4.0), "host receives crouch from the shorter surveyor")
+	_check(await _until(func(): return game.network.joined_members()[0].survivor.crouch > 0.7, 4.0), "host receives crouch from the shorter surveyor")
 	session.bag.active=0
 	session.bag.assign("",2)
 	session.bag.spend({"stone_axe":1})
-	_check(await _until(func(): return initial.distance_to(game.network.member.global_position)>0.65,8.0),"guest input moves server's character")
+	_check(await _until(func(): return initial.distance_to(game.network.joined_members()[0].survivor.global_position)>0.65,8.0),"guest input moves server's character")
 	session.bag.add("coat", 1)
 	session.bag.armor = "coat"
 	session.player.health = session.player.max_health() * 0.6
@@ -84,12 +87,12 @@ func _host() -> void:
 	game.set_player_name("北堤")
 	game.set_appearance("mechanic")
 	_check(session.bag.armor == "coat" and is_equal_approx(session.player.health, 69.0) and session.player.max_health() == 115.0, "changing host character preserves equipment and health fraction")
-	_check(await _until(func(): return game.network.member_avatar.outfit == "ranger", 5.0), "guest's live wardrobe change reaches host")
+	_check(await _until(func(): return game.network.joined_members()[0].avatar.outfit == "ranger", 5.0), "guest's live wardrobe change reaches host")
 	_check(game.options.appearance == "mechanic", "host and guest retain independent choices")
-	_check(await _until(func(): return _overhead(game.network.member_avatar,"秋叶","ranger"),4.0),"host sees final guest rename and new character in the same tag")
+	_check(await _until(func(): return _overhead(game.network.joined_members()[0].avatar,"秋叶","ranger"),4.0),"host sees final guest rename and new character in the same tag")
 	_check(game.options.player_name=="北堤","guest name does not overwrite the host nickname")
-	_check(game.network.member.max_health() == 100.0 and game.network.member.max_stamina() == 110.0, "host applies new capacities only to the switching guest")
-	_check(game.network.member_avatar.equipped == "coat", "coat remains on guest's replacement outfit")
+	_check(game.network.joined_members()[0].survivor.max_health() == 100.0 and game.network.joined_members()[0].survivor.max_stamina() == 110.0, "host applies new capacities only to the switching guest")
+	_check(game.network.joined_members()[0].avatar.equipped == "coat", "coat remains on guest's replacement outfit")
 	session.bag.armor = ""
 	_check(await _until(func(): return session.bag.count("bandage")>=2,9.0),"guest crafting executes on host")
 	var here:=session.player.global_position
@@ -103,11 +106,11 @@ func _host() -> void:
 	_check(not session.player.headlamp.visible, "empty shared inventory cannot activate host lamp")
 	session.bag.add("torch",1)
 	session.player.toggle_lamp()
-	_check(await _until(func(): return game.network.member.headlamp.visible, 6.0), "guest can light a carried lamp on the host")
+	_check(await _until(func(): return game.network.joined_members()[0].survivor.headlamp.visible, 6.0), "guest can light a carried lamp on the host")
 	session.discard("torch")
-	_check(await _until(func(): return not session.player.headlamp.visible and not game.network.member.headlamp.visible, 2.0), "dropping the last shared lamp extinguishes both players")
+	_check(await _until(func(): return not session.player.headlamp.visible and not game.network.joined_members()[0].survivor.headlamp.visible, 2.0), "dropping the last shared lamp extinguishes both players")
 	_check(await _until(func(): return session.marker_records.size()>0,8.0),"guest map marker mutates shared world")
-	var member: WastelandSurvivor = game.network.member
+	var member: WastelandSurvivor = game.network.joined_members()[0].survivor
 	var order := session.daily_orders()[0]
 	for id in order.inputs:
 		session.bag.add(id, int(order.inputs[id]) * 2)
@@ -123,7 +126,7 @@ func _host() -> void:
 	_check(is_equal_approx(member.health, before - 18.0) and session.player.injury.last_source == "",
 		"host applies the hit only to the damaged guest")
 	var launch := member.global_position + Vector3(0, 3.0, -3.0)
-	game.network.mirror_acid(launch, Vector3.FORWARD * 4.0 + Vector3.UP * 1.4)
+	session.fx.projectile(launch,Vector3.FORWARD*4.0+Vector3.UP*1.4,null,"acid",1.0)
 	await create_timer(0.8).timeout
 	var water := _deep_water(session)
 	_check(water.is_finite(), "loaded water deep enough for the guest")
@@ -134,9 +137,9 @@ func _host() -> void:
 		_check(await _until(func(): return member.submerged, 3.0), "host simulates guest submersion")
 		await create_timer(0.7).timeout
 		session.player_died(member)
-		_check(await _until(func(): return not game.network.member_dead, 6.0), "guest revive processed")
+		_check(await _until(func(): return not game.network.joined_members()[0].downed, 6.0), "guest revive processed")
 		_check(member.breath == member.max_breath() and not member.wet_feet, "revive restores guest air")
-		_check(game.network.member_avatar.outfit == "ranger", "revived guest keeps selected character")
+		_check(game.network.joined_members()[0].avatar.outfit == "ranger", "revived guest keeps selected character")
 		await create_timer(0.5).timeout
 		var boat: WastelandVehicle = session.vehicles.landing_boat
 		member.global_position = boat.global_position + Vector3.RIGHT * 1.9
@@ -150,21 +153,21 @@ func _host() -> void:
 		boat.global_position = buoy + Vector3(0, -0.15, 2.8)
 		member.health = member.max_health() * 0.47
 		member.ride(boat)
-		_check(session.save_now(false) == OK and WastelandSave.read(1).guests.has(game.network.member_token), "host save includes the identified guest's own vitals")
+		_check(session.save_now(false) == OK and WastelandSave.read(1).guests.has(game.network.joined_members()[0].token), "host save includes the identified guest's own vitals")
 		_check(await _until(func(): return not session.fx.drop_records.has("shore_float"), 8.0), "guest can salvage from the helm on the host")
 		_check(member.mount_vehicle == boat and session.progress.records.get("salvage_buoy", 0) == 1, "network salvage leaves the guest aboard and pays once")
-	_check(await _until(func(): return not is_instance_valid(game.network.member), 7.0), "host detects departing guest")
-	_check(await _until(func(): return is_instance_valid(game.network.member) and game.network.member_appearance == "bronx" and game.network.member_avatar.outfit == "bronx", 8.0), "reconnecting guest advertises the Bronx survivor selected on the title screen")
-	_check(_overhead(game.network.member_avatar,"秋叶","bronx") and game.session.guest_states.has(game.network.member_token) and not game.session.guest_states.has("秋叶"),"renamed guest reconnects under the same save token and tag")
-	_check(game.network.member.health / game.network.member.max_health() < 0.55, "injured guest reconnects with its own saved health")
+	_check(await _until(func(): return game.network.joined_members().is_empty(), 7.0), "host detects departing guest")
+	_check(await _until(func(): return not game.network.joined_members().is_empty() and game.network.joined_members()[0].appearance == "bronx" and game.network.joined_members()[0].avatar.outfit == "bronx", 8.0), "reconnecting guest advertises the Bronx survivor selected on the title screen")
+	_check(_overhead(game.network.joined_members()[0].avatar,"秋叶","bronx") and game.session.guest_states.has(game.network.joined_members()[0].token) and not game.session.guest_states.has("秋叶"),"renamed guest reconnects under the same save token and tag")
+	_check(game.network.joined_members()[0].survivor.health / game.network.joined_members()[0].survivor.max_health() < 0.55, "injured guest reconnects with its own saved health")
 	_check(await _until(func(): return session.marker_records.any(func(marker): return marker.name == "重连确认"), 4.0), "host receives reconnected guest's acknowledgement")
 	game.set_appearance("medic")
-	_check(await _until(func(): return game.network.member.profile == "climber", 4.0), "reconnected guest can switch to climber")
+	_check(await _until(func(): return game.network.joined_members()[0].survivor.profile == "climber", 4.0), "reconnected guest can switch to climber")
 	game.set_player_name("秋叶")
 	game.set_appearance("surveyor")
 	var saved_ok := session.save_now(false)==OK
 	var saved := WastelandSave.read(1)
-	_check(saved_ok and game.options.player_name=="秋叶" and _overhead(game.network.member_avatar,"秋叶","climber") and saved.guests.size()==1 and saved.guests.has(game.network.member_token) and saved.player.profile=="surveyor" and saved.guests[game.network.member_token].profile=="climber","matching nicknames save two separate character profiles under the original guest token")
+	_check(saved_ok and game.options.player_name=="秋叶" and _overhead(game.network.joined_members()[0].avatar,"秋叶","climber") and saved.guests.size()==1 and saved.guests.has(game.network.joined_members()[0].token) and saved.player.profile=="surveyor" and saved.guests[game.network.joined_members()[0].token].profile=="climber","matching nicknames save two separate character profiles under the original guest token")
 	await _host_fieldwork(session)
 	_done()
 
@@ -179,12 +182,12 @@ func _client() -> void:
 	var session:WastelandSession=game.session
 	_check(true,"client receives world")
 	_verify_actor_pages()
-	_check(_overhead(game.network.host_avatar,"渡口的风","ferryman"),"bootstrap displays host nickname and fixed character name")
-	_check(game.network.host_avatar.outfit == "ferryman" and game.options.appearance == "surveyor", "guest receives distinct host outfit at bootstrap")
+	_check(_overhead(game.network.replica_avatar(1),"渡口的风","ferryman"),"bootstrap displays host nickname and fixed character name")
+	_check(game.network.replica_avatar(1).outfit == "ferryman" and game.options.appearance == "surveyor", "guest receives distinct host outfit at bootstrap")
 	_check(session.player.health == 90.0 and session.player.max_breath() == 19.0, "new guest starts with full selected vitals")
 	_check(session.bag.count("cloth")==9,"shared inventory bootstrap")
 	_check(await _until(func(): return game.network.smooth_actors.values().any(func(actor): return actor.type == "fox" and actor.morph == "local"), 4.0), "guest sees the host's wildlife identity and local morph")
-	var host_avatar: WastelandPartyAvatar = game.network.host_avatar
+	var host_avatar: WastelandPartyAvatar = game.network.replica_avatar(1)
 	_check(session.bag.current()=="" and session.player.hand.model_id=="" and session.player.hand.swing_serial==0,"guest starts empty-handed before its first punch")
 	_check(await _until(func(): return game.network.smooth_actors.size()>WastelandLan.ACTORS_PER_PAGE,3.0),"actual multi-page wildlife group reaches the guest")
 	Input.action_press("fire")
@@ -194,8 +197,9 @@ func _client() -> void:
 	var grip: Node3D = host_avatar.grip
 	var held := grip.get_node_or_null("HeldItem") as MeshInstance3D
 	_check(grip.name=="RightGrip" and grip.get_meta("held","")=="stone_axe" and is_instance_valid(held) and held.visible and held.mesh==WastelandItemArt.mesh("stone_axe",session.catalog.items.stone_axe),"guest sees the selected axe mesh in the host's right grip")
-	await create_timer(0.85).timeout
-	_check(host_avatar.action_kind=="" and host_avatar.get_meta("swings",0)==1 and session.player.hand.swing_serial==1,"repeated snapshots finish both swings without replaying either")
+	var settled:=await _until(func():return host_avatar.action_kind=="",3.0)
+	await create_timer(0.20).timeout
+	_check(settled and host_avatar.action_kind=="" and host_avatar.get_meta("swings",0)==1 and session.player.hand.swing_serial==1,"repeated snapshots finish both swings without replaying either")
 	Input.action_press("crouch")
 	_check(await _until(func(): return session.player.crouch > 0.9 and session.player.eyes.position.y < 1.07, 3.0), "guest camera follows its authoritative crouched body")
 	Input.action_release("crouch")
@@ -204,20 +208,20 @@ func _client() -> void:
 	await create_timer(0.9).timeout
 	Input.action_release("up")
 	_check(session.player.global_position.distance_to(point)>0.65,"client mirrors remote movement")
-	_check(await _until(func(): return game.network.host_avatar.outfit == "mechanic", 4.0), "guest sees host's live wardrobe change")
+	_check(await _until(func(): return game.network.replica_avatar(1).outfit == "mechanic", 4.0), "guest sees host's live wardrobe change")
 	game.set_player_name("暂用名")
 	game.set_player_name("秋叶")
 	game.set_appearance("ranger")
-	_check(await _until(func(): return _overhead(game.network.host_avatar,"北堤","mechanic"),4.0),"guest sees host rename and new character independently")
+	_check(await _until(func(): return _overhead(game.network.replica_avatar(1),"北堤","mechanic"),4.0),"guest sees host rename and new character independently")
 	_check(game.options.player_name=="秋叶","host rename does not replace guest nickname")
 	session.ui_command("craft",["bandage",1,null])
 	_check(await _until(func(): return session.bag.count("bandage")>=2,8.0),"craft result replicates to guest")
 	_check(await _until(func(): return not session.construction.blocks.is_empty(),6.0),"placed frame replicates to guest")
-	_check(await _until(func(): return game.network.host_lamp.visible and session.bag.count("torch") == 1, 4.0), "guest sees light from host's carried lantern")
+	_check(await _until(func(): return game.network.replica_lamp(1).visible and session.bag.count("torch") == 1, 4.0), "guest sees light from host's carried lantern")
 	Input.action_press("flashlight")
 	await create_timer(0.14).timeout
 	Input.action_release("flashlight")
-	_check(await _until(func(): return not game.network.host_lamp.visible and not session.player.headlamp.visible and session.bag.count("torch") == 0, 4.0), "guest sees both lamps extinguished after loss")
+	_check(await _until(func(): return not game.network.replica_lamp(1).visible and not session.player.headlamp.visible and session.bag.count("torch") == 0, 4.0), "guest sees both lamps extinguished after loss")
 	session.ui_command("marker",[Vector2(14,30),"队伍标记"])
 	_check(await _until(func(): return session.marker_records.size()>0,5.0),"guest receives shared marker")
 	var order := session.daily_orders()[0]
@@ -263,16 +267,16 @@ func _client() -> void:
 	game.set_appearance("bronx")
 	await create_timer(0.4).timeout
 	_check(game.network.connect_to("127.0.0.1", port) == OK, "guest reconnects to same host")
-	_check(await _until(func(): return game.session.replica and is_instance_valid(game.network.host_avatar), 7.0), "reconnected guest receives a fresh avatar")
-	if is_instance_valid(game.network.host_avatar):
-		_check(game.network.host_avatar.outfit == "mechanic" and game.options.appearance == "bronx" and game.session.player.profile=="bronx", "reconnect preserves both players' distinct last choices")
-		_check(_overhead(game.network.host_avatar,"北堤","mechanic") and game.options.player_name=="秋叶","both nicknames survive reconnect")
+	_check(await _until(func(): return game.session.replica and is_instance_valid(game.network.replica_avatar(1)), 7.0), "reconnected guest receives a fresh avatar")
+	if is_instance_valid(game.network.replica_avatar(1)):
+		_check(game.network.replica_avatar(1).outfit == "mechanic" and game.options.appearance == "bronx" and game.session.player.profile=="bronx", "reconnect preserves both players' distinct last choices")
+		_check(_overhead(game.network.replica_avatar(1),"北堤","mechanic") and game.options.player_name=="秋叶","both nicknames survive reconnect")
 		game.session.ui_command("marker",[Vector2(15,31),"重连确认"])
-		_check(await _until(func(): return game.network.host_avatar.outfit == "medic", 4.0), "guest sees the medic after reconnect")
+		_check(await _until(func(): return game.network.replica_avatar(1).outfit == "medic", 4.0), "guest sees the medic after reconnect")
 		game.set_appearance("climber")
 		_check(game.session.player.max_breath() == 21.0 and game.session.player.health < 53.0, "guest changes profile on reconnect without free healing")
-		_check(await _until(func(): return game.network.host_avatar.outfit == "surveyor", 4.0), "both peers finish exchanging character updates")
-		_check(await _until(func(): return _overhead(game.network.host_avatar,"秋叶","surveyor"),3.0) and game.options.player_name=="秋叶" and game.session.player.profile=="climber","same nickname on both peers keeps their character names distinct")
+		_check(await _until(func(): return game.network.replica_avatar(1).outfit == "surveyor", 4.0), "both peers finish exchanging character updates")
+		_check(await _until(func(): return _overhead(game.network.replica_avatar(1),"秋叶","surveyor"),3.0) and game.options.player_name=="秋叶" and game.session.player.profile=="climber","same nickname on both peers keeps their character names distinct")
 		await _guest_fieldwork(game.session)
 	_done()
 
@@ -293,20 +297,20 @@ func _host_fieldwork(session: WastelandSession) -> void:
 	var cell: Vector2i=plant.get_meta("cell")
 	var where:=plant.global_position+Vector3.BACK*1.20
 	where.y=session.stream.ground_at(where)+0.12
-	game.network.member.global_position=where
-	game.network.member.velocity=Vector3.ZERO
+	game.network.joined_members()[0].survivor.global_position=where
+	game.network.joined_members()[0].survivor.velocity=Vector3.ZERO
 	for piece:String in TEST_GEAR.values(): session.bag.add(piece,1)
 	session.bag.add("herbal_tea",1)
 	session.bag.add("trail_ration",1)
 	session.bag.add("field_sickle",1)
 	session.bag.assign("field_sickle",6)
-	game.network.member_slot=6
+	game.network.joined_members()[0].slot=6
 	session.add_marker(Vector2(plant.global_position.x,plant.global_position.z),"采药验证"+id)
 	_check(await _until(func(): return session.stream.chunk_diff(cell).get("removed",{}).has(id) and session.bag.count("medicinal_herb")>=4,9.0),"host grants herb sample and yield after guest's real sickle swing")
 	_check(await _until(func(): return session.marker_records.any(func(row): return row.name=="采药确认"),4.0),"host receives guest confirmation after replicated resource removal")
-	_check(await _until(func(): return session.bag.gear==TEST_GEAR and _gear_visible(game.network.member_avatar) and game.network.member.hand.gloves_worn,5.0),"host receives eight worn slots and renders the equipped guest")
-	_check(await _until(func(): return session.bag.gear.hands=="" and session.bag.gear.head==TEST_GEAR.head and not game.network.member.hand.gloves_worn,5.0),"guest removing gloves clears only the hands slot on the host")
-	_check(await _until(func():return is_instance_valid(game.network.member) and game.network.member.warm_drink_left>115 and game.network.member.ration_left>85,4.0) and session.player.warm_drink_left==0.0 and session.player.ration_left==0.0,"guest provisions affect only the consuming member on the authority")
+	_check(await _until(func(): return session.bag.gear==TEST_GEAR and _gear_visible(game.network.joined_members()[0].avatar) and game.network.joined_members()[0].survivor.hand.gloves_worn,5.0),"host receives eight worn slots and renders the equipped guest")
+	_check(await _until(func(): return session.bag.gear.hands=="" and session.bag.gear.head==TEST_GEAR.head and not game.network.joined_members()[0].survivor.hand.gloves_worn,5.0),"guest removing gloves clears only the hands slot on the host")
+	_check(await _until(func():return not game.network.joined_members().is_empty() and game.network.joined_members()[0].survivor.warm_drink_left>115 and game.network.joined_members()[0].survivor.ration_left>85,4.0) and session.player.warm_drink_left==0.0 and session.player.ration_left==0.0,"guest provisions affect only the consuming member on the authority")
 	var trunk:StaticBody3D
 	for node in session.stream.active[Vector2i(-1,1)].decoration_root.get_children():
 		if node.get_meta("resource","") in ["oak","pine"] and node.get_meta("index","")=="4600":
@@ -315,13 +319,13 @@ func _host_fieldwork(session: WastelandSession) -> void:
 	if not trunk:
 		_check(false,"locate a tree for the remote strike")
 		return
-	var member:WastelandSurvivor=game.network.member
+	var member:WastelandSurvivor=game.network.joined_members()[0].survivor
 	var foot:=trunk.global_position+Vector3.BACK*1.4
 	foot.y=session.stream.ground_at(foot)+0.08
 	member.global_position=foot
 	member.velocity=Vector3.ZERO
 	session.bag.assign("",7)
-	game.network.member_slot=7
+	game.network.joined_members()[0].slot=7
 	var tree_cell:Vector2i=trunk.get_meta("cell")
 	var tree_key:String=trunk.get_meta("index")
 	session.add_marker(Vector2(foot.x,foot.z),"验树")
@@ -330,7 +334,7 @@ func _host_fieldwork(session: WastelandSession) -> void:
 	_check(await _until(func():return session.marker_records.any(func(row):return row.name=="丢弃首击"),4.0) and session.bag.count("alpine_cap")==1,"authority preserves last worn cap after first guest discard")
 	session.add_marker(Vector2.ZERO,"允许二击")
 	_check(await _until(func():return session.bag.count("alpine_cap")==0,4.0),"second guest confirmation produces an authoritative drop")
-	await _until(func(): return not is_instance_valid(game.network.member),2.0)
+	await _until(func(): return game.network.joined_members().is_empty(),2.0)
 
 func _guest_fieldwork(session: WastelandSession) -> void:
 	if not await _until(func(): return session.marker_records.any(func(row): return row.name.begins_with("采药验证")) and session.bag.current()=="field_sickle",5.0):
@@ -351,9 +355,9 @@ func _guest_fieldwork(session: WastelandSession) -> void:
 	session.ui_command("marker",[point,"采药确认"])
 	for piece:String in TEST_GEAR.values():
 		session.ui_command("consume",[piece])
-	_check(await _until(func(): return session.bag.gear==TEST_GEAR and _gear_visible(game.network.host_avatar) and session.player.hand.gloves_worn,5.0),"guest receives eight authoritative slots and sees the host wearing them")
+	_check(await _until(func(): return session.bag.gear==TEST_GEAR and _gear_visible(game.network.replica_avatar(1)) and session.player.hand.gloves_worn,5.0),"guest receives eight authoritative slots and sees the host wearing them")
 	session.ui_command("consume",["work_gloves"])
-	_check(await _until(func(): return session.bag.gear.hands=="" and not session.player.hand.gloves_worn and game.network.host_avatar.accessories.get("feet")=="trail_boots",5.0),"removing gloves preserves boots on both guest views")
+	_check(await _until(func(): return session.bag.gear.hands=="" and not session.player.hand.gloves_worn and game.network.replica_avatar(1).accessories.get("feet")=="trail_boots",5.0),"removing gloves preserves boots on both guest views")
 	session.ui_command("consume",["herbal_tea"])
 	session.ui_command("consume",["trail_ration"])
 	_check(await _until(func():return session.player.warm_drink_left>115 and session.player.ration_left>85 and session.bag.count("trail_ration")==0,4.0),"guest sees its own food effects and shared stack debit")

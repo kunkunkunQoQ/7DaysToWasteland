@@ -111,12 +111,12 @@ func run()->void:
 	check(s.bag.count("wood")==1 and s.chest_view(key).items.wood==5,"reject invalid counts and forged container key")
 	var host_bag:=s.bag
 	s.bag=WastelandBag.new(s.catalog)
-	s.remote_actor=true
+	s.actor_peer_id=2
 	s._open_loot(body)
 	s.apply_ui_command("chest_take",[key,"stone",1])
-	check(s.bag.count("stone")==1 and s.chest_key(true)==key,"second actor sees and takes last stone")
+	check(s.bag.count("stone")==1 and s.chest_key(2)==key,"second actor sees and takes last stone")
 	s.chest_close(key)
-	s.remote_actor=false
+	s.actor_peer_id=1
 	s.bag=host_bag
 	check(model.opened and s.chest_move(key,"take","stone",1)==0,"one viewer leaves other viewer open and final item cannot duplicate")
 	s.apply_ui_command("chest_all",[key])

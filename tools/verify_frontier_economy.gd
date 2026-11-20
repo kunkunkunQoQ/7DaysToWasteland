@@ -170,8 +170,8 @@ func online(host:bool,port:int)->void:
 		at_board(origin)
 		var order:=s.daily_orders()[1]
 		check(app.network.listen(port)==OK,"host accepts courier")
-		if await until(func():return is_instance_valid(app.network.member)):
-			var guest:WastelandSurvivor=app.network.member
+		if await until(func():return not app.network.joined_members().is_empty()):
+			var guest:WastelandSurvivor=app.network.joined_members()[0].survivor
 			guest.global_position=s.player.position+Vector3.RIGHT*0.8
 			check(await until(func():return s.progress.dispatch.get("id")==order.id),"guest registers independent authenticated departure")
 			var at:Vector2=order.at
@@ -190,7 +190,7 @@ func online(host:bool,port:int)->void:
 			guest.global_position=s.player.position+Vector3.RIGHT*0.8
 			s.clock.hours=17.4
 			check(await until(func():return s.achievements.unlocked("clock_out")),"same guest completes on time and team earns one accessory")
-			await until(func():return not is_instance_valid(app.network.member))
+			await until(func():return app.network.joined_members().is_empty())
 			check(s.save_now(false)==OK,"save authority after guest delivers")
 			app.network.stop()
 			var old_id:=s.get_instance_id()

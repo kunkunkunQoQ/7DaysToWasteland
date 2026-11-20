@@ -195,7 +195,7 @@ func provoke(origin: Vector3) -> void:
 	sense_left = 0.0
 	_cancel_action()
 
-func tick(delta: float, player: WastelandSurvivor, partner: WastelandSurvivor, observer_range: float) -> Vector3:
+func tick(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSurvivor], observer_range: float) -> Vector3:
 	if not is_instance_valid(seen):
 		seen = null
 	if not is_instance_valid(locked_target):
@@ -221,14 +221,14 @@ func tick(delta: float, player: WastelandSurvivor, partner: WastelandSurvivor, o
 				return Vector3.ZERO
 			return route.heading(delta, goal, false, false, reach, 0.4)
 		if state == State.SLEEPING:
-			var lamp_owner := player if _beam_reaches(player) else partner if _beam_reaches(partner) else null
+			var lamp_owner:=_closest_player(player,teammates,_beam_reaches)
 			light_dwell = light_dwell + delta if lamp_owner != null else 0.0
 			if light_dwell >= 0.6:
 				seen = lamp_owner
 				_wake(lamp_owner.global_position)
 			elif sense_left <= 0.0 or heard_serial != actor.director.sound_serial:
 				sense_left = 0.20
-				seen = player if _can_see(player) else partner if _can_see(partner) else null
+				seen=_closest_player(player,teammates,_can_see)
 				if seen != null:
 					_wake(seen.global_position)
 				else:
@@ -262,7 +262,7 @@ func tick(delta: float, player: WastelandSurvivor, partner: WastelandSurvivor, o
 		return Vector3.ZERO
 	if sense_left <= 0.0:
 		sense_left = actor.actor_rng.randf_range(0.19, 0.29) if observer_range < 26.0 else 0.59 if observer_range < 55.0 else 1.25
-		_survey(player, partner)
+		_survey(player,teammates)
 	actor.alerted = actor.wave or memory > 0.0 or _alive(seen) or mode == Mode.PURSUE
 	if not animal:
 		state = State.ATTACK_BLOCK if is_instance_valid(route.wall) else State.RAGE if rage_left > 0.0 else State.CHASE if mode in [Mode.CHASE, Mode.RANGE, Mode.FLANK] else State.INVESTIGATE if mode in [Mode.INVESTIGATE, Mode.SEARCH] else State.WANDER
@@ -303,14 +303,24 @@ func windup_progress() -> float:
 func _alive(player: WastelandSurvivor) -> bool:
 	return is_instance_valid(player) and not player.is_queued_for_deletion() and player.health > 0.0
 
-func _survey(player: WastelandSurvivor, partner: WastelandSurvivor) -> void:
+func _closest_player(player:WastelandSurvivor,teammates:Array[WastelandSurvivor],condition:Callable)->WastelandSurvivor:
+	var best:WastelandSurvivor
+	var distance:=INF
+	if _alive(player) and condition.call(player):
+		best=player
+		distance=actor.global_position.distance_squared_to(player.global_position)
+	for person:WastelandSurvivor in teammates:
+		if not _alive(person): continue
+		var next:=actor.global_position.distance_squared_to(person.global_position)
+		if next<distance and condition.call(person):
+			best=person
+			distance=next
+	return best
+
+func _survey(player: WastelandSurvivor, teammates: Array[WastelandSurvivor]) -> void:
 	# Keep a visible target until it escapes. A closer player behind cover cannot steal aggro.
 	if not _can_see(seen):
-		var at := actor.global_position
-		if _alive(partner) and at.distance_squared_to(partner.global_position) < at.distance_squared_to(player.global_position):
-			seen = partner if _can_see(partner) else player if _can_see(player) else null
-		else:
-			seen = player if _can_see(player) else partner if _can_see(partner) else null
+		seen=_closest_player(player,teammates,_can_see)
 	if _alive(seen):
 		pursuing_cue = false
 		heard_serial = actor.director.sound_serial
@@ -326,9 +336,7 @@ func _survey(player: WastelandSurvivor, partner: WastelandSurvivor) -> void:
 		if danger.is_finite():
 			_remember(danger, float(profile.memory))
 	if actor.wave and actor.session.clock.horde_active():
-		var anchor := player
-		if _alive(partner) and actor.global_position.distance_squared_to(partner.global_position) < actor.global_position.distance_squared_to(player.global_position):
-			anchor = partner
+		var anchor:=_closest_player(player,teammates,_alive)
 		if _alive(anchor):
 			_remember(anchor.global_position, 5.5)
 			pursuing_cue = true

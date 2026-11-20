@@ -18,7 +18,7 @@ func _host() -> void:
 		session.fx.projectile(ground+Vector3.UP*4.4,Vector3(0.06,1.4,0.04),null,"acid",16)
 		session.fx.simulate_projectiles(0.08)
 	,CONNECT_ONE_SHOT)
-	if not await _until(func(): return is_instance_valid(game.network.member),12):
+	if not await _until(func(): return not game.network.joined_members().is_empty(),12):
 		_check(false,"guest joins")
 		_done()
 		return
@@ -28,7 +28,7 @@ func _host() -> void:
 		return _impact_patches(session,prior_shot.origin)==1
 	_check(await _until(reaches_ground,3),"host resolves pre-join airborne shot into one ground patch")
 	await create_timer(0.6).timeout
-	var guest: WastelandSurvivor = game.network.member
+	var guest: WastelandSurvivor = game.network.joined_members()[0].survivor
 	var at := guest.global_position
 	var before := guest.health
 	session.hordes._spawn("bloater",at+Vector3.RIGHT*0.7,false)

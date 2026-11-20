@@ -119,7 +119,28 @@ var preview_target := Vector3.ZERO
 var preview_hour := 0.0
 var network: Node
 var replica := false
-var remote_actor := false
+var actor_peer_id := WastelandLan.HOST_ID
+var remote_actor: bool:
+	get: return actor_peer_id!=WastelandLan.HOST_ID
+
+func living_players() -> Array[WastelandSurvivor]:
+	var result: Array[WastelandSurvivor]=[]
+	var owner: WastelandSurvivor=network.owner_player(self) if is_instance_valid(network) and network.server() else player
+	if is_instance_valid(owner) and owner.health>0.0: result.append(owner)
+	if is_instance_valid(network) and network.server(): result.append_array(network.living_guests())
+	return result
+
+func team_distance_squared(point:Vector3)->float:
+	var distance:=INF
+	for person:WastelandSurvivor in living_players():
+		distance=minf(distance,person.global_position.distance_squared_to(point))
+	return distance
+
+func guest_positions()->Array[Vector3]:
+	var result:Array[Vector3]=[]
+	if is_instance_valid(network) and network.server():
+		for person:WastelandSurvivor in network.living_guests(): result.append(person.global_position)
+	return result
 
 func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data: WastelandCatalog, opts: WastelandSettings, preview: bool = false) -> void:
 	options = opts
@@ -350,7 +371,7 @@ func _physics_process(delta: float) -> void:
 	if death_screen:
 		return
 	var at := player.global_position
-	stream.refresh(at, clampi(int(options.display.radius), 2, 6))
+	stream.refresh(at, clampi(int(options.display.radius), 2, 6),guest_positions())
 	atmosphere.sync(clock, delta, player.camera.global_position, -player.camera.global_basis.z, audio)
 	light_tick -= delta
 	if light_tick < 0.0:
@@ -370,9 +391,7 @@ func _physics_process(delta: float) -> void:
 		next_vehicles = 0.71
 		Patrol.tick(self)
 		_sync_vehicles()
-		_discover_site(player)
-		if is_instance_valid(network) and is_instance_valid(network.member) and not network.member_dead:
-			_discover_site(network.member)
+		for person:WastelandSurvivor in living_players(): _discover_site(person)
 	if controls_enabled:
 		_process_controls(delta)
 	else:
@@ -427,7 +446,7 @@ func optics_active()->bool:
 	return (bag.current()=="field_glasses" and action_held("alternate")) or (bag.offhand=="field_glasses" and InputMap.has_action("offhand_use") and action_held("offhand_use"))
 
 func movement_axis() -> Vector2:
-	return network.remote_input.get("drive",Vector2.ZERO) if remote_actor else Input.get_vector("left","right","up","down")
+	return network.current_input().get("drive",Vector2.ZERO) if remote_actor else Input.get_vector("left","right","up","down")
 
 func _open_for_player(id: String, context: Variant) -> void:
 	if remote_actor:
@@ -1015,6 +1034,7 @@ func _record_observation(id: String, species_name: String, morph: String = "") -
 	if is_instance_valid(network):
 		if remote_actor:
 			message.emit(words, 4.0)
+			network.broadcast_message(words,4.0,actor_peer_id)
 		else:
 			network.tell(words, 4.0)
 
@@ -1110,8 +1130,8 @@ func _container_record(object: StaticBody3D) -> Dictionary:
 func _open_loot(object: StaticBody3D) -> void:
 	cache_inventory.open(self,object)
 
-func chest_key(remote:=false)->String:
-	return cache_inventory.actors[remote]
+func chest_key(peer:int=WastelandLan.HOST_ID)->String:
+	return cache_inventory.actors.get(peer,"")
 
 func chest_view(key:String)->Dictionary:
 	return cache_inventory.view(self,key)
@@ -1120,10 +1140,10 @@ func chest_move(key:String,action:String,item:String="",amount:int=1)->int:
 	return cache_inventory.move(self,key,action,item,amount)
 
 func chest_close(key:String)->void:
-	if key==chest_key(remote_actor): chest_leave(remote_actor)
+	if key==chest_key(actor_peer_id): chest_leave(actor_peer_id)
 
-func chest_leave(remote:bool)->void:
-	cache_inventory.leave(self,remote)
+func chest_leave(peer:int)->void:
+	cache_inventory.leave(self,peer)
 
 func chest_lids()->Array[String]:
 	return cache_inventory.lids()
@@ -1467,11 +1487,11 @@ func projectile_hit(kind: String, damage: float, hit: Dictionary, source: Node3D
 		fx.burst(hit.position, Color("#abc876"), 1.15)
 		if body is WastelandSurvivor:
 			body.damage(damage, "acid", origin)
-		elif is_instance_valid(player.mount_vehicle) and body == player.mount_vehicle:
-			player.damage(damage, "acid", origin)
-		elif is_instance_valid(network) and is_instance_valid(network.member) and body == network.member.mount_vehicle:
-			network.member.damage(damage, "acid", origin)
 		elif body is WastelandVehicle:
+			for person:WastelandSurvivor in living_players():
+				if person.mount_vehicle==body:
+					person.damage(damage,"acid",origin)
+					return
 			_damage_vehicle(body,damage,hit.position,normal)
 		elif body is StaticBody3D:
 			if normal.y > 0.58:
@@ -1602,7 +1622,7 @@ func refuel(cell: Vector3i) -> void:
 func rest(cell: Vector3i) -> void:
 	if not construction.blocks.has(cell) or construction.blocks[cell].device != "campfire":
 		return
-	if is_instance_valid(network) and network.server() and network.remote_id!=0:
+	if is_instance_valid(network) and network.server() and network.player_count()>1:
 		notify("当前队伍在线，无法跳过夜晚")
 		return
 	if hordes.nearest_enemy(player.global_position, 16.0) != null or clock.horde_active() or campfire_warmth(player.global_position) <= 0.0:
@@ -1655,7 +1675,7 @@ func job_action() -> void:
 			"built":int(progress.records.get("build",0)),"searches":int(progress.records.get("loot",0)),
 			"station":_station_name(WastelandTerrainGen.chunk_at(Vector2(player.position.x,player.position.z)))}
 		if remote_actor:
-			_finish_campaign.call_deferred() # Restore the host player before serializing both teammates.
+			_finish_campaign.call_deferred() # Restore the host player before serializing the party.
 		else:
 			_finish_campaign()
 		return
@@ -1785,7 +1805,7 @@ func order_destination() -> Dictionary:
 	return {"at":tracked_row.board if returning else tracked_row.at,"name":"交回 · "+str(tracked_row.name) if returning else tracked_row.source}
 
 func _courier_id() -> String:
-	return "guest-"+str(network.member_token).sha256_text() if remote_actor and is_instance_valid(network) else "host"
+	return "guest-"+str(network.active_member.token).sha256_text() if remote_actor and is_instance_valid(network) and network.active_member!=null else "host"
 
 func start_dispatch(id:String) -> void:
 	if replica or not _at_board() or progress.delivery_day==clock.day(): return
@@ -1878,12 +1898,10 @@ func discard(id: String, allow_confirmation := true) -> void:
 	if bag.available_count(id)==0:
 		notify("队友正持有这件物品")
 		return
-	if is_instance_valid(network) and network.server() and is_instance_valid(network.member):
-		var partner_slot:int=network.owner_slot_during_guest_action if remote_actor else network.member_slot
-		if bag.partner_needs_last_mainhand(id,partner_slot):
-			player.set_meta("discard_item","")
-			notify("队友主手正在使用最后一件%s，请先让队友切换快捷格。"%catalog.title(id))
-			return
+	if is_instance_valid(network) and network.server() and network.team_uses_last_mainhand(self,id):
+		player.set_meta("discard_item","")
+		notify("队友主手正在使用最后一件%s，请先让队友切换快捷格。"%catalog.title(id))
+		return
 	if discard_protected(id):
 		var now:=Time.get_ticks_msec()
 		if not allow_confirmation or player.get_meta("discard_item","")!=id or now>int(player.get_meta("discard_until",0)):
@@ -1976,12 +1994,12 @@ func _sync_vehicles() -> void:
 		return
 	for id in vehicles.keys():
 		var vehicle: WastelandVehicle = vehicles[id]
-		if not vehicle.occupied and vehicle.global_position.distance_squared_to(player.global_position) > 115.0 * 115.0:
+		if not vehicle.occupied and team_distance_squared(vehicle.global_position)>115.0*115.0:
 			vehicle.queue_free()
 			vehicles.erase(id)
 	for id in vehicle_records:
 		var point: Vector3 = vehicle_records[id].point
-		if not vehicles.has(id) and point.distance_squared_to(player.global_position) < 105.0 * 105.0:
+		if not vehicles.has(id) and team_distance_squared(point)<105.0*105.0:
 			_mount_vehicle(id)
 
 func _mount_vehicle(id: String) -> void:
@@ -2044,11 +2062,12 @@ func remove_marker(id: int) -> void:
 	marker_records = marker_records.filter(func(entry): return int(entry.id) != id)
 
 func player_died(victim: WastelandSurvivor = null) -> void:
-	if is_instance_valid(network) and is_instance_valid(network.member) and victim == network.member:
-		if not network.member_dead and clock.horde_active():
-			hordes.event_deaths += 1
-		network.member_failed()
-		return
+	if is_instance_valid(network) and network.server():
+		var state:WastelandLan.MemberState=network.member_for(victim)
+		if state!=null:
+			if not state.downed and clock.horde_active(): hordes.event_deaths+=1
+			network.member_failed(state)
+			return
 	if death_screen:
 		return
 	deaths += 1
@@ -2079,7 +2098,7 @@ func respawn() -> void:
 	death_screen = false
 	player.position = start_position()
 	stream.ensure_landing(player.position)
-	stream.refresh(player.position,int(options.display.radius))
+	stream.refresh(player.position,int(options.display.radius),guest_positions())
 	player.position.y=stream.ground_at(player.position)+0.14
 	player.velocity = Vector3.ZERO
 	player.health = player.max_health()
@@ -2103,7 +2122,7 @@ func save_now(report: bool) -> Error:
 	if slot == 0 or preview_only or remote_actor or not is_instance_valid(player):
 		return ERR_UNCONFIGURED
 	if is_instance_valid(network):
-		network.store_guest(self)
+		network.store_guests(self)
 	achievements.refresh()
 	var snapshot := {
 		"guests":guest_states,

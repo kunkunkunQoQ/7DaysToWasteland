@@ -300,9 +300,9 @@ func host() -> void:
 	var serial := s.fx.serial
 	var start := guest_collectible()
 	if not check(app.network.listen(port)==OK,"host opens ENet"): return
-	if not check(await until(func():return is_instance_valid(app.network.member)),"independent guest joins"): return
-	app.network.member_slot=3
-	app.network.member.global_position=wall+outside(MP_KEY)*2.8+Vector3.UP*0.20
+	if not check(await until(func():return not app.network.joined_members().is_empty()),"independent guest joins"): return
+	app.network.joined_members()[0].slot=3
+	app.network.joined_members()[0].survivor.global_position=wall+outside(MP_KEY)*2.8+Vector3.UP*0.20
 	if not check(await until(func():return confirmed("wall-ready")),"guest aims at intact wall"): return
 	if not await compare_remote_finish(c,1): return
 	var first_contact := mark(c,MP_KEY)
@@ -321,7 +321,7 @@ func host() -> void:
 	var saved: Dictionary=WastelandSave.read(1).diffs[WastelandTerrainGen.grid_key(SHORE)]
 	check(saved.site_damage[MP_KEY]==0.0 and not saved.get("wall_marks",{}).has(MP_KEY),"authority saves gap without a stale impact")
 	s.ui_command("marker",[Vector2(wall.x,wall.z),"wall-saved"])
-	await until(func():return not is_instance_valid(app.network.member),5000)
+	await until(func():return app.network.joined_members().is_empty(),5000)
 
 func guest() -> void:
 	if not check(app.network.connect_to("127.0.0.1",port)==OK,"guest starts ENet connection"): return

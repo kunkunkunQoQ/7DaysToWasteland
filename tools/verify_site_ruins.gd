@@ -169,7 +169,7 @@ func online(app:Node,host:bool)->void:
 		s.stream.ensure_landing(point)
 		s.player.position=point+Vector3(0,s.stream.ground_at(point)+0.24,7)
 		check(app.network.listen(19482)==OK,"host listens")
-		if await until(func():return is_instance_valid(app.network.member)):
+		if await until(func():return not app.network.joined_members().is_empty()):
 			var c:WastelandChunk=s.stream.active[cell]
 			var id:=first_furniture(c)
 			var label:="%d/%d/%s"%[c.ruin.condition,c.ruin.end,id]

@@ -22,8 +22,9 @@ func trial(height:float,depth:float,ceiling:bool,enabled:bool,duck:bool,axis:Vec
 	if ceiling: solid(start+Vector3(0,2.02,-1.48),Vector3(2,0.12,1.63))
 	session.options.display.auto_step=not enabled if remote_test else enabled
 	if remote_test:
-		session.remote_actor=true
-		session.network.remote_input={"enabled":true,"auto_step":enabled,"drive":axis}
+		session.actor_peer_id=2
+		session.network.active_member=WastelandLan.MemberState.new(2)
+		session.network.active_member.input={"enabled":true,"auto_step":enabled,"drive":axis}
 	var p:=session.player
 	p.position=start+Vector3.UP*0.022
 	p.rotation=Vector3.ZERO
@@ -45,7 +46,8 @@ func trial(height:float,depth:float,ceiling:bool,enabled:bool,duck:bool,axis:Vec
 	if duck: Input.action_release("crouch")
 	var cleared:=max_y>start.y+height-0.06 and p.position.z<start.z-1.40
 	if water_test: check(swam and max_rise<0.15,"submerged movement floats gradually without stepping onto the block")
-	session.remote_actor=false
+	session.actor_peer_id=1
+	if is_instance_valid(session.network): session.network.active_member=null
 	stage.free()
 	await physics_frame
 	return cleared

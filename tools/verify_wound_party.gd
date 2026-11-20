@@ -9,11 +9,11 @@ func _host() -> void:
 	world.hordes.next_herd = INF
 	for item: String in ["splint","honey","bandage"]: world.bag.add(item,1)
 	_check(game.network.listen(port) == OK, "medical host opens")
-	if not await _until(func(): return is_instance_valid(game.network.member),12):
+	if not await _until(func(): return not game.network.joined_members().is_empty(),12):
 		_check(false,"guest joined")
 		_done()
 		return
-	var member: WastelandSurvivor = game.network.member
+	var member: WastelandSurvivor = game.network.joined_members()[0].survivor
 	var owner_hp := world.player.health
 	member.infection = 18
 	member.bleed = 12

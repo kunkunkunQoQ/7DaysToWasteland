@@ -217,7 +217,7 @@ func _process(delta: float) -> void:
 	if is_instance_valid(queue_label):
 		_refresh_queue()
 		if is_instance_valid(favorite_button):
-			var fingerprint := hash([session.bag.counts,session.bag.partner_offhand,session.progress.skills,_station_record().get("molten",{})])
+			var fingerprint := hash([session.bag.counts,session.bag.partner_offhands,session.progress.skills,_station_record().get("molten",{})])
 			if fingerprint != recipe_fingerprint:
 				recipe_fingerprint = fingerprint
 				_filter_recipes(recipe_query)
@@ -592,7 +592,7 @@ func _consume_selected() -> void:
 	_bag_details()
 
 func _bag_fingerprint() -> int:
-	return hash([session.bag.counts,session.bag.active,session.bag.gear,session.bag.bar,session.bag.partner_offhand])
+	return hash([session.bag.counts,session.bag.active,session.bag.gear,session.bag.bar,session.bag.partner_offhands])
 
 func _craft(context: Variant) -> void:
 	recipe_view="全部"

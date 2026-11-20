@@ -60,7 +60,7 @@ func run()->void:
 			a.brain.goal=a.global_position
 			a.brain.seen=null
 			a.brain.memory=0
-			a.brain._survey(session.player,null)
+			a.brain._survey(session.player,[])
 			var forage:=session.hordes.trail_snapshot(at)
 			check(a.brain.forage_left>0 and not forage.is_empty() and forage.back().activity=="停步觅食","animal stops to feed and scuffs terrain "+id)
 			a.brain.provoke(at-Vector3.RIGHT*5)

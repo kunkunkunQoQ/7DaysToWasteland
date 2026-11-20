@@ -414,27 +414,27 @@ func loopback(host: bool) -> void:
 		session.add_marker(actual_spawn,"主机开局实测")
 		check(session.start_position().distance_to(session.player.position)<2,"host begins at stored wilderness landing")
 		check(app.network.listen(port)==OK,"expedition host listens")
-		if not await wait_until(func():return is_instance_valid(app.network.member),10.0):check(false,"guest joins");return
+		if not await wait_until(func():return not app.network.joined_members().is_empty(),10.0):check(false,"guest joins");return
 		var f:=remote_field(session.stream.generator)
 		var at:=Vector3(f.x,0,f.y)
 		session.stream.ensure_landing(at)
 		at.y=session.stream.ground_at(at)+0.2
 		session.player.global_position=at
-		app.network.member.global_position=at+Vector3.RIGHT*1.8
+		app.network.joined_members()[0].survivor.global_position=at+Vector3.RIGHT*1.8
 		for hit in 12: session.stream.excavate(at)
 		session.add_marker(Vector2(f),"远征营地")
 		check(await wait_until(func():return session.marker_records.any(func(m):return m.name=="远征到达"),12.0),"remote guest confirms matching excavation and position")
-		check(session.save_now(false)==OK and WastelandSave.read(1).guests.has(app.network.member_token),"save both long-distance travelers")
+		check(session.save_now(false)==OK and WastelandSave.read(1).guests.has(app.network.joined_members()[0].token),"save both long-distance travelers")
 		var home:=session.start_position()
 		session.stream.ensure_landing(home)
 		session.player.global_position=home
-		app.network.member.global_position=home+Vector3.RIGHT*1.8
+		app.network.joined_members()[0].survivor.global_position=home+Vector3.RIGHT*1.8
 		check(await wait_until(func():return session.marker_records.any(func(m):return m.name=="返站确认"),10.0),"both travelers can return to the inland station")
 		session.stream.ensure_landing(at)
 		session.player.global_position=at
-		app.network.member.global_position=at+Vector3.RIGHT*1.8
+		app.network.joined_members()[0].survivor.global_position=at+Vector3.RIGHT*1.8
 		check(await wait_until(func():return session.marker_records.any(func(m):return m.name=="复访确认"),10.0),"guest revisits the previous distant edit after unloading it")
-		await wait_until(func():return not is_instance_valid(app.network.member),4.0)
+		await wait_until(func():return app.network.joined_members().is_empty(),4.0)
 	else:
 		check(app.network.connect_to("127.0.0.1",port)==OK,"expedition guest connects")
 		if not await wait_until(func():return is_instance_valid(app.session) and app.session.replica,10.0):check(false,"bootstrap travels");return

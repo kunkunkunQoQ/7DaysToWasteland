@@ -187,26 +187,26 @@ func host()->void:
 	WastelandLook.solid(s,Vector3(14,0.2,14),THROW_DECK,Color.GRAY)
 	s.player.global_position=THROW_DECK+Vector3(-3,0.3,1)
 	if not check(app.network.listen(port)==OK,"motion host listens"): return
-	if not check(await until(func(): return is_instance_valid(app.network.member)),"motion guest joined"): return
-	app.network.member.global_position=THROW_DECK+Vector3(-0.55,0.3,1)
-	app.network.member.velocity=Vector3.ZERO
+	if not check(await until(func(): return not app.network.joined_members().is_empty()),"motion guest joined"): return
+	app.network.joined_members()[0].survivor.global_position=THROW_DECK+Vector3(-0.55,0.3,1)
+	app.network.joined_members()[0].survivor.velocity=Vector3.ZERO
 	var at:=THROW_DECK+Vector3(3.65,9,1)
 	var id:=drop(at,{"stone":7},Vector3.ZERO)
 	if not check(await until(func(): return FileAccess.file_exists(ticket)),"guest observed moving and settled authoritative snapshots"): return
 	if not check(await until(func(): return not s.fx.drop_records.has(id) and s.bag.count("stone")==7),"guest's walking input collects seven stones authoritatively"): return
-	check(s.bag.bar[0]=="stone" and s.player.global_position.distance_to(at-Vector3.UP*9)>5.0 and app.network.member.global_position.x>THROW_DECK.x+1.4,"only the guest approached and the first slot now holds the stone")
+	check(s.bag.bar[0]=="stone" and s.player.global_position.distance_to(at-Vector3.UP*9)>5.0 and app.network.joined_members()[0].survivor.global_position.x>THROW_DECK.x+1.4,"only the guest approached and the first slot now holds the stone")
 	var shared:=THROW_DECK+Vector3(0,0.29,-3.0)
 	var shared_id:=drop(shared,{"wood":5,"stone":3},Vector3.ZERO)
 	if not check(await until(func(): return FileAccess.file_exists(ticket+"both_waiting")),"guest sees second pile before either player can reach it"): return
-	for avatar:WastelandSurvivor in [s.player,app.network.member]:
+	for avatar:WastelandSurvivor in [s.player,app.network.joined_members()[0].survivor]:
 		avatar.global_position=shared+Vector3.RIGHT*(-0.63 if avatar==s.player else 0.63)
 		avatar.velocity=Vector3.ZERO
 	if not check(await until(func(): return not s.fx.drop_live.has(shared_id) and not s.fx.drop_records.has(shared_id)),"one pile disappears with both players inside pickup range"): return
 	check(s.bag.count("wood")==5 and s.bag.count("stone")==10 and s.bag.bar[0]=="stone" and s.bag.bar[1]=="wood","host credits mixed pile once, reuses the existing shortcut and fills the next one")
 	if not check(await until(func(): return FileAccess.file_exists(ticket+"both_received")),"guest confirmed the same bag, slots and removed collider"): return
 	s.player.global_position=THROW_DECK+Vector3(-4.5,0.3,1)
-	app.network.member.global_position=THROW_DECK+Vector3(0.5,0.3,1)
-	app.network.member.velocity=Vector3.ZERO
+	app.network.joined_members()[0].survivor.global_position=THROW_DECK+Vector3(0.5,0.3,1)
+	app.network.joined_members()[0].survivor.velocity=Vector3.ZERO
 	s.bag.add("stone_axe",1)
 	s.bag.assign("stone_axe",0)
 	s.bag.active=0
@@ -214,7 +214,7 @@ func host()->void:
 	check(s.bag.count("stone_axe")==1 and not axe_pile(),"guest requests left the owner's one equipped axe intact")
 	s.bag.active=1
 	stage("owner_switched")
-	if not check(await until(func(): return app.network.member_slot==0),"guest equipped the axe after owner switched away"): return
+	if not check(await until(func(): return app.network.joined_members()[0].slot==0),"guest equipped the axe after owner switched away"): return
 	s.ui_command("discard",["stone_axe",true])
 	s.ui_command("discard",["stone_axe",true])
 	check(app.hud.toast.contains("队友主手") and s.bag.count("stone_axe")==1,"owner cannot discard the guest's one equipped axe either")
@@ -224,8 +224,8 @@ func host()->void:
 	var buoy:Vector3=s.fx.drop_records.shore_float.point
 	s.stream.ensure_landing(buoy)
 	buoy_platform(buoy)
-	app.network.member.global_position=buoy+Vector3(1.18,-0.23,0)
-	app.network.member.velocity=Vector3.ZERO
+	app.network.joined_members()[0].survivor.global_position=buoy+Vector3(1.18,-0.23,0)
+	app.network.joined_members()[0].survivor.velocity=Vector3.ZERO
 	stage("buoy")
 	if not check(await until(func(): return FileAccess.file_exists(ticket+"buoy_manual")),"guest stood beside the original mission buoy without automatic salvage"): return
 	if not check(await until(func(): return not s.fx.drop_records.has("shore_float") and s.progress.records.get("salvage_buoy",0)==1),"explicit guest use salvages the buoy exactly once on the authority"): return

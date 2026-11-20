@@ -524,7 +524,7 @@ func take_hit(amount: float, origin: Vector3, heavy: bool = false) -> void:
 	else:
 		session.audio.play_at("hit", global_position + Vector3.UP * 0.61, 0.56)
 
-func think(delta: float, player: WastelandSurvivor, partner: WastelandSurvivor = null) -> void:
+func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSurvivor] = []) -> void:
 	if hit_pause>0:
 		var stopped:=minf(hit_pause,delta)
 		hit_pause-=stopped
@@ -551,8 +551,8 @@ func think(delta: float, player: WastelandSurvivor, partner: WastelandSurvivor =
 	hit_chain_left = maxf(0.0, hit_chain_left - delta)
 	attack = maxf(0.0, attack - delta * 2.6)
 	var distance := global_position.distance_to(player.global_position)
-	if is_instance_valid(partner):
-		distance = minf(distance, global_position.distance_to(partner.global_position))
+	for person:WastelandSurvivor in teammates:
+		if is_instance_valid(person) and person.health>0.0: distance=minf(distance,global_position.distance_to(person.global_position))
 	if distance > 105.0:
 		offscreen += delta
 	else:
@@ -569,7 +569,7 @@ func think(delta: float, player: WastelandSurvivor, partner: WastelandSurvivor =
 		session.audio.play_at("growl", global_position + Vector3.UP * float(spec.height) * 0.62, 0.57 if alerted else 0.39)
 	var submerged: bool = global_position.y < -0.27 and session.stream.water_at(global_position)
 	motion_water = submerged
-	var walk := brain.tick(delta, player, partner, distance)
+	var walk := brain.tick(delta, player, teammates, distance)
 	if not active:
 		return
 	windup = brain.windup_progress()

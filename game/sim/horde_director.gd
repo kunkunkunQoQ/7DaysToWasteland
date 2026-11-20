@@ -183,12 +183,11 @@ func spend_path_query() -> bool:
 
 func simulate(delta: float) -> void:
 	var player: WastelandSurvivor = session.player
-	var partner: WastelandSurvivor
-	if is_instance_valid(session.network) and is_instance_valid(session.network.member) and not session.network.member_dead:
-		partner = session.network.member
+	var teammates:Array[WastelandSurvivor]=session.living_players()
+	teammates.erase(player)
 	path_budget = PATHS_PER_TICK
 	for actor in alive.duplicate():
-		actor.think(delta, player, partner)
+		actor.think(delta,player,teammates)
 	next_sim -= delta
 	if next_sim > 0.0:
 		return
@@ -197,11 +196,11 @@ func simulate(delta: float) -> void:
 		sounds.pop_front()
 	for i in range(fresh.size() - 1, -1, -1):
 		var row: Dictionary = fresh[i]
-		if session.stream.at_surface(row.at) and (str(row.get("nest","")).is_empty() or row.at.distance_squared_to(player.global_position) < 65.0*65.0 or (partner != null and row.at.distance_squared_to(partner.global_position) < 65.0*65.0)):
+		if session.stream.at_surface(row.at) and (str(row.get("nest","")).is_empty() or session.team_distance_squared(row.at)<65.0*65.0):
 			if _spawn(row.id, row.at, row.wave, row):
 				fresh.remove_at(i)
 	_activate_nests(player.global_position)
-	if partner != null: _activate_nests(partner.global_position)
+	for person:WastelandSurvivor in teammates: _activate_nests(person.global_position)
 	if session.clock.horde_active():
 		var day: int = session.clock.event_day()
 		var warning:=14.0 if session.progress.records.has("exp_weather") else 6.0
@@ -264,7 +263,8 @@ func simulate(delta: float) -> void:
 		_scan_heat()
 	_fill_pack()
 	if session.clock.elapsed >= next_herd:
-		var observer := partner if is_instance_valid(partner) and rng.randf() < 0.5 else player
+		var observers:Array[WastelandSurvivor]=session.living_players()
+		var observer:WastelandSurvivor=observers[rng.randi_range(0,observers.size()-1)] if observers.size()>1 else player
 		var formed := wildlife_count < WILDLIFE_CAP and _new_herd(observer.global_position, WILDLIFE_CAP - wildlife_count)
 		next_herd = session.clock.elapsed + (28.0 if formed else 12.0)
 	if session.clock.elapsed >= next_patrol and not session.clock.horde_active():
@@ -387,6 +387,8 @@ func _reinforce_wave() -> void:
 
 func _patrol() -> void:
 	var at: Vector3 = session.player.global_position
+	var observers:Array[WastelandSurvivor]=session.living_players()
+	if observers.size()>1: at=observers[rng.randi_range(0,observers.size()-1)].global_position
 	var zone: int = session.stream.generator.biome(at.x, at.z)
 	var zombies := alive.size() - wildlife_count
 	if zombies < active_cap(false):
@@ -529,9 +531,7 @@ func _heat_arrival(entry: Dictionary) -> void:
 		var offset: Vector2 = [Vector2(along,near),Vector2(along,extent-near),Vector2(near,along),Vector2(extent-near,along)][side]
 		var edge := origin + offset
 		var p := spawn_ground.surface(session, Vector3(edge.x,0,edge.y))
-		if not p.is_finite() or p.distance_to(source) < 8.0 or p.distance_to(session.player.global_position) < 9.0:
-			continue
-		if is_instance_valid(session.network) and is_instance_valid(session.network.member) and p.distance_to(session.network.member.global_position) < 9.0:
+		if not p.is_finite() or p.distance_to(source)<8.0 or session.team_distance_squared(p)<9.0*9.0:
 			continue
 		if _spawn("screamer",p,false,{"interest":source,"memory":35.0}):
 			entry.pending = int(entry.pending) - 1
@@ -574,6 +574,7 @@ func _graded(difficulty: int, allow_brute: bool) -> String:
 func _try_near(center: Vector3, type: String, low: float, high: float, is_wave: bool, hinted_angle: float = INF, cue: Dictionary = {}) -> bool:
 	if alive.size() - wildlife_count >= CAP:
 		return false
+	var shared_party:bool=session.living_players().size()>1
 	for attempt in range(12):
 		var a := hinted_angle + rng.randf_range(-0.52, 0.52) if hinted_angle != INF else rng.randf() * TAU
 		var p := center + Vector3(cos(a),0,sin(a)) * rng.randf_range(low, high)
@@ -584,8 +585,10 @@ func _try_near(center: Vector3, type: String, low: float, high: float, is_wave: 
 			var range_to_player: float = p.distance_to(session.player.global_position)
 			if range_to_player < 28.0 or range_to_player > 55.0:
 				continue
-			if is_instance_valid(session.network) and is_instance_valid(session.network.member) and not session.network.member_dead and p.distance_to(session.network.member.global_position) < 28.0:
+			if session.team_distance_squared(p)<28.0*28.0:
 				continue
+		elif shared_party and session.team_distance_squared(p)<8.0*8.0:
+			continue
 		var locator := WastelandTerrainGen.chunk_at(Vector2(p.x,p.z))
 		var midpoint := Vector2(locator * WastelandTerrainGen.SIZE) + Vector2.ONE * 16.0
 		if session.stream.generator.site_for(locator) != "" and midpoint.distance_to(Vector2(p.x,p.z)) < 8.8:
@@ -750,9 +753,7 @@ func infected_effect(kind: String, point: Vector3, normal := Vector3.UP) -> void
 
 func damage_near(point: Vector3, radius: float, amount: float, source: String) -> void:
 	if session.replica: return
-	var victims: Array[WastelandSurvivor] = [session.player]
-	if is_instance_valid(session.network) and is_instance_valid(session.network.member) and not session.network.member_dead:
-		victims.append(session.network.member)
+	var victims:Array[WastelandSurvivor]=session.living_players()
 	for victim in victims:
 		if victim.health <= 0.0: continue
 		var target := victim.global_position + Vector3.UP * victim.stand_shape.height * (0.16 if source == "residue" else 0.50)

@@ -27,8 +27,8 @@ func position_guest(cell: Vector3i) -> bool:
 		point.y=s.stream.ground_at(point)+0.08
 		var q:=PhysicsRayQueryParameters3D.create(point+Vector3.UP*1.50,at,3)
 		if s.get_world_3d().direct_space_state.intersect_ray(q).get("collider")==s.construction.nodes[cell]:
-			app.network.member.global_position=point
-			app.network.member.velocity=Vector3.ZERO
+			app.network.joined_members()[0].survivor.global_position=point
+			app.network.joined_members()[0].survivor.velocity=Vector3.ZERO
 			return true
 	return false
 
@@ -65,13 +65,13 @@ func host() -> void:
 	if not check(forge!=Vector3i.MAX and fire!=Vector3i.MAX,"host places two physical stations"): return
 	for id: String in ["coal","wood","scrap","dirty_water"]:
 		s.bag.add(id,8 if id=="scrap" else 2 if id=="dirty_water" else 1)
-	if not check(app.network.listen(port)==OK and await until(func():return is_instance_valid(app.network.member)),"ENet guest joins"): return
+	if not check(app.network.listen(port)==OK and await until(func():return not app.network.joined_members().is_empty()),"ENet guest joins"): return
 	var host_near:=WastelandConstruction.position_of(forge)+Vector3.BACK*2.3
 	host_near.y=s.stream.ground_at(host_near)+0.08
 	s.player.global_position=host_near
 	var away:=WastelandConstruction.position_of(forge)+Vector3.RIGHT*12
 	away.y=s.stream.ground_at(away)+0.08
-	app.network.member.global_position=away
+	app.network.joined_members()[0].survivor.global_position=away
 	flag("far")
 	if not check(await until(func():return s.marker_records.size()==1),"guest's ordinary marker acknowledges ordered requests"): return
 	check(record(forge).fuel==0.0 and not record(forge).has("smelt_input") and not record(forge).enabled and record(fire).queue.is_empty() and s.bag.count("coal")==1 and s.bag.count("scrap")==8,"out-of-reach requests leave both stations and bag intact")

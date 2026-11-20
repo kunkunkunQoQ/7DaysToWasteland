@@ -18,7 +18,8 @@ var active := 0
 var gear := {"head":"","body":"","hands":"","feet":""}
 var offhand: String:
 	get: return str(gear.get("offhand",""))
-var partner_offhand: String = ""
+# One reservation per other player. Equal item IDs represent distinct units.
+var partner_offhands: Array[String] = []
 # Older saves and callers store the torso slot as "armor".
 var armor: String:
 	get: return gear.body
@@ -34,6 +35,7 @@ func _init(data: WastelandCatalog, snapshot: Dictionary = {}) -> void:
 			bar[index] = str(saved_bar[index])
 		automatic_shortcuts = snapshot.get("automatic_shortcuts", {}).duplicate()
 		active = clampi(int(snapshot.get("active", 0)), 0, HOTBAR_SIZE - 1)
+		partner_offhands.assign(snapshot.get("partner_offhands",[]))
 		restore_gear(snapshot)
 		magazine = snapshot.get("magazine", {}).duplicate()
 
@@ -109,17 +111,17 @@ func count(id: String) -> int:
 	return int(counts.get(id, 0))
 
 func available_count(id:String)->int:
-	return maxi(0,count(id)-int(not id.is_empty() and partner_offhand==id))
+	return maxi(0,count(id)-partner_offhands.count(id))
 
 func current() -> String:
 	var id: String = bar[active]
-	return id if _mainhand_units(id,offhand,partner_offhand)>0 else ""
+	return id if _mainhand_units(id,offhand)>0 else ""
 
-func partner_needs_last_mainhand(id:String,partner_slot:int)->bool:
-	return id==bar[partner_slot] and _mainhand_units(id,partner_offhand,offhand)==1
+func partner_needs_last_mainhand(id:String,partner_slot:int,partner_hand:String)->bool:
+	return id==bar[partner_slot] and _mainhand_units(id,partner_hand)==1
 
-func _mainhand_units(id:String,secondary:String,other_secondary:String)->int:
-	return count(id)-int(other_secondary==id)-int(secondary==id)-int(secondary==id and is_worn(id))
+func _mainhand_units(id:String,secondary:String)->int:
+	return count(id)-partner_offhands.count(id)-int(offhand==id)-int(secondary==id and is_worn(id))
 
 func stack_size(id: String) -> int:
 	return maxi(1, int(catalog.items.get(id, {}).get("stack", 99)))

@@ -101,14 +101,14 @@ func host() -> void:
 	var point:=body.global_position+Vector3.BACK
 	session.player.global_position=point
 	if not check(app.network.listen(port)==OK,"real ENet host listening"): return
-	if not check(await until(func(): return is_instance_valid(app.network.member)),"guest joined"): return
-	app.network.member.global_position=point
+	if not check(await until(func(): return not app.network.joined_members().is_empty()),"guest joined"): return
+	app.network.joined_members()[0].survivor.global_position=point
 	session._open_loot(body)
-	app.network._as_member(session,func(): session._open_loot(body))
+	app.network._as_member(session,app.network.joined_members()[0],func(): session._open_loot(body))
 	if not check(await until(func(): return quantity("chest")==6),"host panel displays six wood"): return
 	if not await exchange(true): return
 	if not check(await acknowledged("guestclosed"),"guest closed storage panel"): return
-	if not check(await until(func(): return session.chest_key(true)=="" and session.chest_key()==key and model.opened),"guest close leaves host session and lid open"): return
+	if not check(await until(func(): return session.chest_key(app.network.joined_members()[0].peer_id)=="" and session.chest_key()==key and model.opened),"guest close leaves host session and lid open"): return
 	if not check(await press_one("chest") and quantity("chest")==5,"remaining host can still take one"): return
 	app.close_overlay()
 	check(not model.opened,"closing final viewer shuts lid")

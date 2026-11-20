@@ -4,6 +4,7 @@ signal changed
 
 const PORT := 47357
 const PORT_COUNT := 4
+const MAX_PLAYERS := 6
 const QUERY := "7DW/find/1"
 const ANSWER := "7DW/room/1"
 const INTERVAL := 1500
@@ -69,7 +70,7 @@ func browse(address_ok: Callable) -> void:
 		if port<1024 or port>65535 or (not rooms.has(id) and rooms.size()>=64): continue
 		var old: Dictionary = rooms.get(id,{})
 		if not old.is_empty() and ip.begins_with("127."): ip = old.address
-		var room := {"id":id,"version":row[2].left(16),"name":row[3].left(48),"owner":row[4].left(12),"day":maxi(1,int(row[5])),"port":port,"players":clampi(int(row[7]),1,2),"address":ip}
+		var room := {"id":id,"version":row[2].left(16),"name":row[3].left(48),"owner":row[4].left(12),"day":maxi(1,int(row[5])),"port":port,"players":clampi(int(row[7]),1,MAX_PLAYERS),"address":ip}
 		dirty = dirty or old != room
 		rooms[id] = room
 		seen[id] = now

@@ -48,9 +48,9 @@ func run()->void:
 	check(bag.current()=="" and bag.offhand=="torch","one torch cannot be held twice")
 	bag.add("torch",1)
 	check(bag.current()=="torch","two copies can be held in both hands")
-	bag.partner_offhand="torch"
+	bag.partner_offhands=["torch"]
 	check(bag.current()=="" and not bag.spend({"torch":2}),"other player's offhand reservation removes a unit from usable inventory")
-	bag.partner_offhand=""
+	bag.partner_offhands=[]
 	s.ui_command("offhand",["quilted_pants"])
 	check(bag.gear_bonus("warmth")==0,"holding winter trousers grants no worn stat")
 	s.ui_command("consume",["quilted_pants"])
@@ -202,24 +202,24 @@ func online(host:bool,port:int)->void:
 		for id:String in ["torch","improvised_shield","quilted_pants"]:s.bag.add(id,1)
 		s.ui_command("offhand",["torch"])
 		check(game.network.listen(port)==OK,"two peers use separate offhands")
-		if await until(func():return is_instance_valid(game.network.member)):
-			var guest:WastelandSurvivor=game.network.member
-			check(await until(func():return game.network.member_offhand=="improvised_shield" and s.bag.gear.get("legs")=="quilted_pants"),"guest equips a genuine leg slot and a private left hand")
+		if await until(func():return not game.network.joined_members().is_empty()):
+			var guest:WastelandSurvivor=game.network.joined_members()[0].survivor
+			check(await until(func():return game.network.joined_members()[0].offhand=="improvised_shield" and s.bag.gear.get("legs")=="quilted_pants"),"guest equips a genuine leg slot and a private left hand")
 			s.ui_command("offhand",["improvised_shield"])
-			check(s.bag.offhand=="torch" and s.bag.partner_offhand=="improvised_shield","host cannot claim the guest's only shield")
-			check(await until(func():return guest.guarding and game.network.member_avatar.offhand_block and game.network.member_avatar.leg_rigs[1].has_node("TrouserLeg")),"dedicated guest input raises shield and renders worn legs on host")
+			check(s.bag.offhand=="torch" and s.bag.partner_offhands==["improvised_shield"],"host cannot claim the guest's only shield")
+			check(await until(func():return guest.guarding and game.network.joined_members()[0].avatar.offhand_block and game.network.joined_members()[0].avatar.leg_rigs[1].has_node("TrouserLeg")),"dedicated guest input raises shield and renders worn legs on host")
 			var hp:=guest.health
 			guest.invulnerable=0
 			guest.damage(12,"claw",guest.position-guest.global_basis.z*2)
-			check(is_equal_approx(hp-guest.health,3.0*(1.0-s.bag.gear_bonus("armor"))) and game.network.member_offhand=="dented_shield" and s.bag.offhand=="torch","authority combines shield and worn trousers and wears only guest shield")
+			check(is_equal_approx(hp-guest.health,3.0*(1.0-s.bag.gear_bonus("armor"))) and game.network.joined_members()[0].offhand=="dented_shield" and s.bag.offhand=="torch","authority combines shield and worn trousers and wears only guest shield")
 			check(await until(func():return not guest.guarding),"releasing dedicated input lowers remote shield")
-			check(await until(func():return guest.guarding and game.network.member_avatar.offhand_id=="dented_shield"),"right-click with idle primary raises guest shield")
+			check(await until(func():return guest.guarding and game.network.joined_members()[0].avatar.offhand_id=="dented_shield"),"right-click with idle primary raises guest shield")
 			s.add_marker(Vector2.ZERO,"guard verified")
-			var token:String=game.network.member_token
+			var token:String=game.network.joined_members()[0].token
 			check(s.save_now(false)==OK and WastelandSave.read(1).guests[token].offhand=="dented_shield" and WastelandSave.read(1).bag.gear.offhand=="torch","save uses independent owner and member slots")
-			check(await until(func():return not is_instance_valid(game.network.member)),"guest disconnect releases reservation")
-			check(await until(func():return is_instance_valid(game.network.member) and game.network.member_offhand=="dented_shield",12),"returning guest reclaims its worn shield")
-			await until(func():return not is_instance_valid(game.network.member))
+			check(await until(func():return game.network.joined_members().is_empty()),"guest disconnect releases reservation")
+			check(await until(func():return not game.network.joined_members().is_empty() and game.network.joined_members()[0].offhand=="dented_shield",12),"returning guest reclaims its worn shield")
+			await until(func():return game.network.joined_members().is_empty())
 	else:
 		check(game.network.connect_to("127.0.0.1",port)==OK,"guest connects to test host")
 		if await until(func():return is_instance_valid(game.session) and game.session.replica):
@@ -228,7 +228,7 @@ func online(host:bool,port:int)->void:
 			s.ui_command("offhand",["torch"])
 			s.ui_command("offhand",["improvised_shield"])
 			s.ui_command("consume",["quilted_pants"])
-			check(await until(func():return s.bag.offhand=="improvised_shield" and game.network.host_avatar.offhand_id=="torch" and game.network.host_avatar.offhand_lit and game.network.host_avatar.leg_rigs[0].has_node("TrouserLeg")),"client displays a lit host torch and shared trousers beside its own shield")
+			check(await until(func():return s.bag.offhand=="improvised_shield" and game.network.replica_avatar(1).offhand_id=="torch" and game.network.replica_avatar(1).offhand_lit and game.network.replica_avatar(1).leg_rigs[0].has_node("TrouserLeg")),"client displays a lit host torch and shared trousers beside its own shield")
 			Input.action_press("offhand_use")
 			check(await until(func():return s.bag.offhand=="dented_shield" and s.player.guarding and s.player.hand.offhand_block),"client receives its own shield guard and wear states")
 			Input.action_release("offhand_use")
@@ -241,7 +241,7 @@ func online(host:bool,port:int)->void:
 			game._show_title()
 			await create_timer(0.6).timeout
 			game.network.connect_to("127.0.0.1",port)
-			check(await until(func():return is_instance_valid(game.session) and game.session.replica and game.session.bag.offhand=="dented_shield" and game.network.host_avatar.offhand_id=="torch",12),"reconnect restores personal shield and remote host torch")
+			check(await until(func():return is_instance_valid(game.session) and game.session.replica and game.session.bag.offhand=="dented_shield" and game.network.replica_avatar(1).offhand_id=="torch",12),"reconnect restores personal shield and remote host torch")
 			s=game.session
 	if is_instance_valid(s):
 		s.simulation_paused=true

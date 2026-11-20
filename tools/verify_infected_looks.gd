@@ -274,10 +274,10 @@ func verify_network(host: bool, port: int) -> void:
 		check(app.network.listen(port) == OK, "host listens with infected and wildlife faces already assigned")
 		var joins := 2 if "--reconnect" in OS.get_cmdline_user_args() else 1
 		for attempt in joins:
-			if not await until(func(): return is_instance_valid(app.network.member), 25):
+			if not await until(func(): return not app.network.joined_members().is_empty(), 25):
 				check(false, "guest joins host")
 				break
-			check(await until(func(): return not is_instance_valid(app.network.member), 25), "guest finishes inspection %d and disconnects" % (attempt+1))
+			check(await until(func(): return app.network.joined_members().is_empty(), 25), "guest finishes inspection %d and disconnects" % (attempt+1))
 	else:
 		check(app.network.connect_to("127.0.0.1", port) == OK, "guest connects over ENet")
 		check(await until(func(): return is_instance_valid(app.session) and app.session.replica, 25), "guest receives world")

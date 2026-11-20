@@ -1,7 +1,8 @@
 extends RefCounted
 
 const CAPACITY:=24
-var actors:={false:"",true:""}
+# Per-viewer state: the owner's peer ID is 1; each guest has its own ID.
+var actors: Dictionary={}
 var mirrored:Array=[]
 
 func model(s:Node,key:String)->Node3D:
@@ -34,17 +35,17 @@ func apply_lids(s:Node,keys:Array)->void:
 	for key:String in keys: paint(s,key,true)
 	mirrored=keys.duplicate()
 
-func leave(s:Node,remote:bool)->void:
-	var key:String=actors[remote]
-	actors[remote]=""
+func leave(s:Node,peer:int)->void:
+	var key:String=actors.get(peer,"")
+	actors.erase(peer)
 	if not key.is_empty() and not actors.values().has(key): paint(s,key,false)
 
 func open(s:Node,body:StaticBody3D)->void:
 	var key:String=body.get_meta("key")
 	if s.replica or not near(s,model(s,key)): return
-	leave(s,s.remote_actor)
+	leave(s,s.actor_peer_id)
 	s._container_record(body)
-	actors[s.remote_actor]=key
+	actors[s.actor_peer_id]=key
 	s.stream.active[body.get_meta("cell")].sync_cache(key)
 	paint(s,key,true)
 	s.Patrol.opened_cache(s,body.get_meta("cell"))
@@ -63,7 +64,7 @@ func view(s:Node,key:String)->Dictionary:
 	if s.replica:
 		return s.replica_chest if key!="" and s.replica_chest.get("key","")==key else {}
 	var visual:=model(s,key)
-	if key=="" or actors[s.remote_actor]!=key or not near(s,visual): return {}
+	if key=="" or actors.get(s.actor_peer_id,"")!=key or not near(s,visual): return {}
 	var body:StaticBody3D=visual.get_parent()
 	var record:Dictionary=s.stream.chunk_diff(body.get_meta("cell")).get("containers",{}).get(key,{})
 	if not record.has("items"): return {}

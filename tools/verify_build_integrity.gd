@@ -216,16 +216,16 @@ func check_party(app: Node, hosting: bool) -> void:
 		check(con.place(wall, "frame", 0, 0, home), "host places upper frame")
 		con.damage(wall, 10.0)
 		check(app.network.listen(19481) == OK, "construction loopback starts")
-		if await wait_for(func(): return is_instance_valid(app.network.member)):
-			app.network.member_slot = 3
+		if await wait_for(func(): return not app.network.joined_members().is_empty()):
+			app.network.joined_members()[0].slot = 3
 			var eye := con.position_of(wall) + Vector3.BACK * 2.1
-			app.network.member.global_position = eye - Vector3.UP * app.network.member.eyes.position.y
+			app.network.joined_members()[0].survivor.global_position = eye - Vector3.UP * app.network.joined_members()[0].survivor.eyes.position.y
 			check(await wait_for(func(): return con.blocks[wall].tier == 1), "guest completes damaged-frame repair and upgrade on authority")
 			check(s.bag.count("wood") == wood - 9 and con.blocks[wall].hp == 250.0, "host debits shared materials exactly once for both strikes")
 			await create_timer(1.4).timeout
 			con.damage(base, 999.0)
 			check(not con.blocks.has(wall), "host removes unsupported guest-built wall")
-			await wait_for(func(): return not is_instance_valid(app.network.member), 6.0)
+			await wait_for(func(): return app.network.joined_members().is_empty(), 6.0)
 		else: check(false, "guest handshake")
 	else:
 		check(app.network.connect_to("127.0.0.1", 19481) == OK, "construction replica connects")

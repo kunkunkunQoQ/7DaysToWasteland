@@ -157,20 +157,20 @@ func party(host: bool) -> void:
 		s.progress.job=s.catalog.quests.size()
 		s.simulation_paused=false
 		check(app.network.listen(port)==OK,"host opens shared patrol session")
-		if not await until(func():return is_instance_valid(app.network.member),18.0):
+		if not await until(func():return not app.network.joined_members().is_empty(),18.0):
 			check(false,"guest joins")
 			return
-		app.network.member.global_position=s.player.global_position+Vector3.RIGHT
+		app.network.joined_members()[0].survivor.global_position=s.player.global_position+Vector3.RIGHT
 		if not await until(func():return not s.progress.patrol.is_empty(),15.0):
 			check(false,"guest registered from board")
 			return
 		check(s.progress.patrol.stops.size()==3,"guest registers the team's three-stop route")
 		for i in 3: await visit()
 		at_board(s.starting_cell)
-		app.network.member.global_position=s.player.global_position+Vector3.RIGHT
+		app.network.joined_members()[0].survivor.global_position=s.player.global_position+Vector3.RIGHT
 		s.simulation_paused=false
 		check(await until(func():return s.Patrol.completed(s)==1,15.0),"guest cashes in host's field work")
-		await until(func():return not is_instance_valid(app.network.member),10.0)
+		await until(func():return app.network.joined_members().is_empty(),10.0)
 		check(s.save_now(false)==OK and WastelandSave.read(1).progress.records.get("relay_patrol")==1 and s.bag.count("steel")==4,"shared reward survives host save once")
 	else:
 		check(app.network.connect_to("127.0.0.1",port)==OK,"client connects")

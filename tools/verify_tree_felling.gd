@@ -362,8 +362,8 @@ func host() -> void:
 	s.hordes.next_herd = INF
 	s.simulation_paused = false
 	if not check(app.network.listen(port) == OK, "host listens over ENet"): return
-	if not check(await until(func(): return is_instance_valid(app.network.member)), "guest joins authority"): return
-	var member: WastelandSurvivor = app.network.member
+	if not check(await until(func(): return not app.network.joined_members().is_empty()), "guest joins authority"): return
+	var member: WastelandSurvivor = app.network.joined_members()[0].survivor
 	member.global_position = ground(CENTER + FALL * 3.3)
 	stage()
 	if not check(await until(func(): return marked("tree-ready")), "guest has standing tree and is in fall path"): return
@@ -380,12 +380,12 @@ func host() -> void:
 	var contacts := []
 	active_falls().values()[0].struck.connect(func(id, _damage, _point): contacts.append(id))
 	if not check(await until(func(): return marked("tree-landed")), "guest observed replicated fall, hit and wood"): return
-	check(member.health < before and contacts.count("guest/" + app.network.member_token) == 1 and not contacts.has("host"), "authority hits exposed guest once and spares cutter")
+	check(member.health < before and contacts.count("guest/" + app.network.joined_members()[0].token) == 1 and not contacts.has("host"), "authority hits exposed guest once and spares cutter")
 	check(wood() == total + int(WastelandSession.RESOURCES.oak[2].wood) and active_falls().is_empty(), "one complete host payout across network acknowledgements")
 	check(item_total("stick") >= sticks_before + 2 and item_total("tree_leaf") > leaves_before + 1, "host holds both leaf payouts and several canopy sticks")
 	mark("canopy-%d-%d" % [item_total("stick"), item_total("tree_leaf")])
 	mark("tree-finished")
-	await until(func(): return not is_instance_valid(app.network.member), 8000)
+	await until(func(): return app.network.joined_members().is_empty(), 8000)
 
 func guest() -> void:
 	if not check(app.network.connect_to("127.0.0.1", port) == OK, "guest connects to host"): return

@@ -288,7 +288,7 @@ func slots() -> void:
 
 func lan_room() -> void:
 	_reset("lan",true)
-	var body:=_dialog("局域网协作","选择一个单人存档开放，或加入同一网络里正在游玩的队友。",870,605)
+	var body:=_dialog("局域网协作","选择一个单人存档开放，或加入附近的世界（含房主最多 %d 人）。"%WastelandLan.MAX_PLAYERS,870,605)
 	nickname_input = WARDROBE.player_name_input(body,game)
 	var row:=S.line(body)
 	row.size_flags_vertical=Control.SIZE_EXPAND_FILL
@@ -350,13 +350,13 @@ func _refresh_rooms() -> void:
 	for id in rooms:
 		var room: Dictionary = rooms[id]
 		var current := str(ProjectSettings.get_setting("application/config/version"))
-		var caption := "%s  ·  %d/2\n%s　 第 %d 日" % [room.name,room.players,room.owner,room.day]
+		var caption := "%s  ·  %d/%d\n%s　 第 %d 日" % [room.name,room.players,WastelandLan.MAX_PLAYERS,room.owner,room.day]
 		if room.version!=current: caption+="　版本 "+str(room.version)
 		var button := S.button(caption,func():
 			game.set_player_name(nickname_input.text)
 			var result: Error=game.network.connect_to(room.address,room.port)
 			menu_notice.text="正在加入世界…" if result==OK else "连接失败，请查看房间是否仍然开放。")
-		button.disabled = room.players>=2 or room.version!=current
+		button.disabled = room.players>=WastelandLan.MAX_PLAYERS or room.version!=current
 		room_list.add_child(button)
 
 func _confirm_delete(slot: int, label: String) -> void:

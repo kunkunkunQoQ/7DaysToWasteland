@@ -125,11 +125,11 @@ func network_check(app:Node,host:bool)->void:
 		s.bag.add("composite_filter",1)
 		s.bag.assign("composite_filter",0)
 		check(app.network.listen(19468)==OK,"host starts")
-		if await until(func():return is_instance_valid(app.network.member)):
-			app.network.member.global_position=well+Vector3(0,0.12,1.85)
+		if await until(func():return not app.network.joined_members().is_empty()):
+			app.network.joined_members()[0].survivor.global_position=well+Vector3(0,0.12,1.85)
 			check(await until(func():return s.bag.count("clean_water")==6),"guest use consumes one shared filter on authority")
 			check(s.bag.count("composite_filter")==0,"host sees exact shared debit")
-			await until(func():return not is_instance_valid(app.network.member))
+			await until(func():return app.network.joined_members().is_empty())
 		else: check(false,"guest joined")
 	else:
 		check(app.network.connect_to("127.0.0.1",19468)==OK,"guest connects")

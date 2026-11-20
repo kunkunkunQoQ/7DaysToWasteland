@@ -335,7 +335,7 @@ func _walk(delta: float, drive: Vector2, controls: bool) -> void:
 	var speed_before_landing := velocity.y
 	move_and_slide()
 	if grounded and is_on_wall() and controls and not swimming and not submerged and not duck and crouch<0.10 and speed_before_landing<=0.0 and drive.y< -0.18:
-		var enabled:bool=session.network.remote_input.get("auto_step",true) if session.remote_actor else session.options.display.get("auto_step",true)
+		var enabled:bool=session.network.current_input().get("auto_step",true) if session.remote_actor else session.options.display.get("auto_step",true)
 		if enabled: _step_ledge(direction.normalized())
 	if is_on_floor() and not grounded and not swimming and speed_before_landing < -3.5:
 		hand.landing = clampf((-speed_before_landing - 3.5) / 9.0, 0.0, 1.0) * float(session.options.display.impact_motion)
@@ -580,8 +580,7 @@ func bark_scrape() -> void:
 func damage(amount: float, source: String, origin: Vector3 = Vector3.INF) -> void:
 	if amount <= 0.0 or health <= 0.0 or (invulnerable > 0.0 and amount < 100.0):
 		return
-	if session.player!=self and is_instance_valid(session.network) and session.network.member==self:
-		session.network._as_member(session,func():damage(amount,source,origin))
+	if session.player!=self and is_instance_valid(session.network) and session.network.as_survivor(session,self,func():damage(amount,source,origin)):
 		return
 	if guarding and session.bag.is_shield(session.bag.offhand) and origin.is_finite() and source in ["heavy","claw","boar","radiation","acid"]:
 		var flat:=origin-global_position

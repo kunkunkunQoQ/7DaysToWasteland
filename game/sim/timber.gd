@@ -71,7 +71,7 @@ func fell(body: StaticBody3D, cut: Dictionary, loot: Dictionary) -> void:
 	_spawn(key,record,exclude,parts)
 	session.audio.play_at("tree_split",active[key].global_position,1.0)
 	session.hordes.add_noise(active[key].global_position,20.0,false)
-	if is_instance_valid(session.network): session.network.slow_timer = 0.0
+	if is_instance_valid(session.network): session.network.invalidate_world()
 
 func clear_stump(body: StaticBody3D, point: Vector3) -> void:
 	if session.replica or body.is_queued_for_deletion(): return
@@ -86,7 +86,7 @@ func clear_stump(body: StaticBody3D, point: Vector3) -> void:
 	session.audio.play_at("chop",point,0.8)
 	session.fx.burst(point,Color("#bf956a"),0.85)
 	session.drop_materials(point,{"wood":1})
-	if is_instance_valid(session.network): session.network.slow_timer = 0.0
+	if is_instance_valid(session.network): session.network.invalidate_world()
 
 func _spawn(key: String, record: Dictionary, exclude: Array[RID] = [], parts: Dictionary = {}) -> void:
 	var cut: Dictionary = record.cut
@@ -124,9 +124,7 @@ func woodland(dt: float) -> void:
 	if next_gust > 0.0: return
 	var gust_index := floori(session.clock.elapsed / 8.0)
 	next_gust = 12.0 + posmod(gust_index,7) - session.atmosphere.rain_strength * 3.0
-	var viewers := [session.player]
-	if is_instance_valid(session.network) and is_instance_valid(session.network.member) and not session.network.member_dead:
-		viewers.append(session.network.member)
+	var viewers:Array[WastelandSurvivor]=session.living_players()
 	var used := {}
 	for viewer: WastelandSurvivor in viewers:
 		var at := viewer.global_position
@@ -231,10 +229,13 @@ func mirror(authority: Dictionary) -> void:
 
 func _targets(pivot: Vector3, reach: float) -> Array:
 	var result := []
-	if session.player.health>0 and session.player.global_position.distance_squared_to(pivot)<reach*reach:
-		_survivor_target(result,session.player,"host")
-	if is_instance_valid(session.network) and is_instance_valid(session.network.member) and not session.network.member_dead:
-		_survivor_target(result,session.network.member,"guest/"+str(session.network.member_token))
+	var owner:WastelandSurvivor=session.network.owner_player(session) if is_instance_valid(session.network) and session.network.server() else session.player
+	if owner.health>0 and owner.global_position.distance_squared_to(pivot)<reach*reach:
+		_survivor_target(result,owner,"host")
+	if is_instance_valid(session.network) and session.network.server():
+		for state:WastelandLan.MemberState in session.network.joined_members():
+			if not state.downed and state.survivor.health>0.0 and state.survivor.global_position.distance_squared_to(pivot)<reach*reach:
+				_survivor_target(result,state.survivor,"guest/"+state.token)
 	for actor: WastelandCreature in session.hordes.alive:
 		if actor.active and actor.hp>0 and actor.global_position.distance_squared_to(pivot)<reach*reach:
 			result.append({"id":actor.spawn_serial,"feet":actor.global_position,"radius":actor.capsule.radius,"height":actor.capsule.height})
@@ -250,7 +251,12 @@ func _strike(id: Variant, damage: float, point: Vector3, key: String) -> void:
 		var actor: WastelandCreature = session.hordes.actors_by_serial.get(id)
 		if is_instance_valid(actor): actor.take_hit(damage,point,damage>=16.0)
 	else:
-		var player: WastelandSurvivor = session.player if id=="host" else session.network.member
+		var player:WastelandSurvivor
+		if id=="host":
+			player=session.network.owner_player(session) if is_instance_valid(session.network) and session.network.server() else session.player
+		elif is_instance_valid(session.network):
+			var state:WastelandLan.MemberState=session.network.member_with_token(str(id).trim_prefix("guest/"))
+			if state!=null: player=state.survivor
 		if is_instance_valid(player):
 			player.damage(damage,"timber",point)
 

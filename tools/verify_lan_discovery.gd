@@ -42,7 +42,7 @@ func host() -> void:
 	go.pressed.emit()
 	if not check(await until(func(): return app.network.server()),"selected save opened on configured port"): return
 	check(app.network.port==port and app.session.bag.count("wood")==7,"host restored original inventory")
-	if not check(await until(func(): return is_instance_valid(app.network.member)),"guest connected to existing world"): return
+	if not check(await until(func(): return not app.network.joined_members().is_empty()),"guest connected to existing world"): return
 	if not check(await until(func(): return app.session.marker_records.size()==1),"guest marker reached host"): return
 	if not check(await until(func(): return FileAccess.file_exists(ticket)),"guest reopened browser and saw host advertising"): return
 	app.leave_world()
@@ -55,7 +55,7 @@ func guest() -> void:
 	app.front.lan_room()
 	if not check(await until(func(): return is_instance_valid(listing())),"browser automatically listed named host"): return
 	var button := listing()
-	check("1/2" in button.text and not button.disabled,"room button shows current occupancy and permits joining")
+	check("1/6" in button.text and not button.disabled,"room button shows current occupancy and permits joining")
 	button.pressed.emit()
 	if not check(await until(func(): return app.session.replica),"joining through room row bootstrapped actual ENet session"): return
 	check(app.session.world_settings.name==world_name and app.session.bag.count("wood")==7,"guest received selected saved world")

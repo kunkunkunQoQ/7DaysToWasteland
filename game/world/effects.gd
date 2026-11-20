@@ -262,7 +262,7 @@ func add_items(at: Vector3, items: Dictionary, impulse:=Vector3.INF, discarded:=
 		drop_records[id].pickup_after=session.clock.elapsed+1.0
 	if is_instance_valid(session.player) and drop_live.size()<DROPS and _observer_distance_squared(at)<=65.0*65.0:
 		_show_drop(id)
-	if is_instance_valid(session.network) and session.network.server(): session.network.slow_timer=0.0
+	if is_instance_valid(session.network) and session.network.server(): session.network.invalidate_world()
 
 func collect_nearby() -> void:
 	if session.replica or drop_live.is_empty(): return
@@ -305,7 +305,7 @@ func take_drop(id: String, automatic:=false) -> int:
 	else:
 		if drop_live.has(id): _dress_drop(drop_live[id],drop_records[id])
 		if not buoy: drop_records[id].erase("resting")
-	if is_instance_valid(session.network) and session.network.server(): session.network.slow_timer=0.0
+	if is_instance_valid(session.network) and session.network.server(): session.network.invalidate_world()
 	return moved
 
 func _release_drop(id: String) -> void:
@@ -419,10 +419,7 @@ func _pose_log(body: StaticBody3D, log: Dictionary) -> void:
 	body.get_node("PickupShape").basis = orientation
 
 func _observer_distance_squared(point: Vector3) -> float:
-	var distance: float = session.player.global_position.distance_squared_to(point)
-	if is_instance_valid(session.network) and is_instance_valid(session.network.member):
-		distance = minf(distance, session.network.member.global_position.distance_squared_to(point))
-	return distance
+	return session.team_distance_squared(point)
 
 func _resync_drops() -> void:
 	if not is_instance_valid(session.player):

@@ -163,11 +163,11 @@ func network_test(host: bool, flags: PackedStringArray) -> void:
 		session.bag.add("wood",3)
 		session.bag.add("fiber",2)
 		check(app.network.listen(port)==OK,"host listens on selected ENet port")
-		if await wait_for(func(): return is_instance_valid(app.network.member)):
+		if await wait_for(func(): return not app.network.joined_members().is_empty()):
 			var board:=fixture(SHORE,"trader")
 			var at:=board.global_position+Vector3(1.9,-0.85,0)
-			app.network.member.global_position=at
-			app.network.member.velocity=Vector3.ZERO
+			app.network.joined_members()[0].survivor.global_position=at
+			app.network.joined_members()[0].survivor.velocity=Vector3.ZERO
 			if await wait_for(func(): return session.marker_records.size()==1):
 				shoot(board,4000)
 				check(fixture(SHORE,"trader")==null,"host destroys board after guest sees it intact")

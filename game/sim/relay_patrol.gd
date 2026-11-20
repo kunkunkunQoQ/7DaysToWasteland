@@ -104,9 +104,7 @@ static func tick(s: Node) -> void:
 	var at: Vector2 = destination(s).at
 	var center := Vector3(at.x, 0, at.y)
 	center.y = s.stream.ground_at(center) + 0.5
-	var nearby: bool = s.player.health > 0 and s.player.global_position.distance_squared_to(center) <= 100.0
-	if not nearby and is_instance_valid(s.network) and is_instance_valid(s.network.member) and not s.network.member_dead:
-		nearby = s.network.member.global_position.distance_squared_to(center) <= 100.0
+	var nearby:bool=s.team_distance_squared(center)<=100.0
 	if not nearby:
 		run.erase("listen_until")
 		s.notify("信号中断 · 回到中继柜重新启动守听")

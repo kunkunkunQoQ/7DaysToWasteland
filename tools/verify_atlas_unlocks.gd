@@ -92,11 +92,11 @@ func multiplayer_history(host:bool,port:int) -> void:
 		app.session.achievements.add("inspect_frame",8)
 		app.session.achievements.refresh()
 		check(app.network.listen(port)==OK,"host offers a world with a previously earned challenge")
-		if await wait_for(func():return is_instance_valid(app.network.member)):
+		if await wait_for(func():return not app.network.joined_members().is_empty()):
 			app.session.achievements.add("star_watch",6)
 			app.session.achievements.refresh()
 			check(await wait_for(func():return app.session.marker_records.any(func(row):return row.name=="history verified")),"client acknowledged its durable history")
-			await wait_for(func():return not is_instance_valid(app.network.member))
+			await wait_for(func():return app.network.joined_members().is_empty())
 		else:check(false,"client joins")
 	else:
 		check(earned().is_empty(),"client starts with an independent empty account history")

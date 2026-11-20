@@ -64,7 +64,7 @@ func refresh()->void:
 		out_of_reach.emit()
 		return
 	had_view=not view.is_empty()
-	var next_hash:=hash([view,session.bag.counts,session.bag.capacity(),session.bag.partner_offhand,selected,selected_side,selected_count])
+	var next_hash:=hash([view,session.bag.counts,session.bag.capacity(),session.bag.partner_offhands,selected,selected_side,selected_count])
 	if next_hash==fingerprint: return
 	fingerprint=next_hash
 	var contents:Dictionary=view.get("items",{})
