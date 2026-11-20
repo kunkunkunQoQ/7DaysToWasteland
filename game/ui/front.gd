@@ -268,7 +268,7 @@ func _range(parent: Control, title_text: String, unit: String, lo: float, hi: fl
 
 func slots() -> void:
 	_reset("slots",true)
-	var box := _dialog("存档管理","最多 8 个世界。游戏会定时自动保存。",780,510)
+	var box := _dialog("存档管理","最多 8 个世界。每个世界会自动保存所有玩家和世界进度。",780,510)
 	var list := S.scroller(box)
 	var saves := WastelandSave.list_slots()
 	if saves.is_empty():
@@ -380,10 +380,13 @@ func pause() -> void:
 	var box := _dialog("已暂停",game.session.world_settings.name + "  ·  第 %d 日  %s" % [game.session.clock.day(),game.session.clock.time_text()],450,470)
 	var resume := S.button("返回游戏",func(): game.close_overlay(),true)
 	box.add_child(resume)
-	var save_button := S.button("手动保存",func():
+	var save_button := S.button("保存世界",func():
+		if game.session.replica:
+			menu_notice.text = "正在保存世界…"
+			game.network.send_request("save", [])
+			return
 		var result: Error = game.session.save_now(false)
 		menu_notice.text = "世界已保存" if result == OK else "保存失败 · 错误 %d" % result)
-	save_button.disabled=bool(game.session.replica)
 	box.add_child(save_button)
 	if not game.session.replica:
 		var share := S.button("保存并关闭局域网" if game.network.server() else "将此世界开放到局域网",func():

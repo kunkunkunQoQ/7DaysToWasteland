@@ -1,6 +1,8 @@
 extends RefCounted
 
 const Sites:=preload("res://game/world/expedition_sites.gd")
+const BRIDGE_REWARD := {"spring":2,"bandage":2}
+const WATCH_SUPPLIES := {"well":{"clean_water":2},"bridge":{"bandage":2}}
 const COST:={"shelter":{"wood":4,"fiber":3},"weather":{"scrap":3},"canal":{"stone":3},"well":{"scrap":2,"wood":2}}
 const PREVIOUS:={"weather":"shelter","well":"canal","pump":"ferry","bridge":"pump"}
 const INSTRUCTION:={"shelter":"用木料与纤维加固避风棚，在棚口选择路线。","weather":"橙环沿山肩绕行避风，蓝双环直穿风口较近。走近道前戴上保暖帽或先在棚下取暖，再到风杯塔，修复山口测候仪。","canal":"找到干渠石岸，砌好闸槽，再沿残存水渠前往驼站。","well":"沿干渠与石桩找到八角井圈，修好提水泵。","ferry":"从灰湾南岸入水，沿橙旗绳下潜，在倾覆渡船旁抄录航运铭牌。","pump":"上浮换气，再找青旗浮绳；潜到泵站进水格栅外侧，读取水尺。","bridge":"换气后前往砖红旗，沿绳潜至断桥桥墩旁，拓录界碑。"}
@@ -57,7 +59,7 @@ static func use(s:Node,id:String)->void:
 			return
 		s.progress.records["exp_"+id]=1
 		s.gain(35)
-		if id=="bridge": s.award({"spring":2,"bandage":2},s.player.global_position)
+		if id=="bridge": s.award(BRIDGE_REWARD,s.player.global_position)
 		s.notify(RESULT[id],5)
 		return
 	match id:

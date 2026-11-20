@@ -7,13 +7,15 @@ func _host() -> void:
 	var world: WastelandSession = game.session
 	world.hordes.next_patrol = INF
 	world.hordes.next_herd = INF
-	for item: String in ["splint","honey","bandage"]: world.bag.add(item,1)
+	world.bag.add("splint",1)
 	_check(game.network.listen(port) == OK, "medical host opens")
 	if not await _until(func(): return not game.network.joined_members().is_empty(),12):
 		_check(false,"guest joined")
 		_done()
 		return
-	var member: WastelandSurvivor = game.network.joined_members()[0].survivor
+	var state:WastelandLan.MemberState=game.network.joined_members()[0]
+	var member: WastelandSurvivor = state.survivor
+	for item: String in ["splint","honey","bandage"]: state.bag.add(item,1)
 	var owner_hp := world.player.health
 	member.infection = 18
 	member.bleed = 12
@@ -22,7 +24,7 @@ func _host() -> void:
 	member.hydration = 14
 	member.wet = 0.8
 	member.stamina = member.max_stamina() * 0.5
-	_check(await _until(func(): return member.sprain == 0 and member.bleed == 0 and member.infection < 10.0 and world.bag.count("splint") == 0,12), "guest treatment updates only the authoritative member and spends shared materials")
+	_check(await _until(func(): return member.sprain == 0 and member.bleed == 0 and member.infection < 10.0 and state.bag.counts.is_empty(),12) and world.bag.count("splint")==1, "guest treatment uses the guest's medical supplies while the host keeps its splint")
 	_check(world.player.health == owner_hp and world.player.sprain == 0.0 and world.player.infection == 0.0, "remote wound treatment leaves host physiology independent")
 	_check(world.save_now(false) == OK, "host saves both players after treatment")
 	var saved := WastelandSave.read(1)

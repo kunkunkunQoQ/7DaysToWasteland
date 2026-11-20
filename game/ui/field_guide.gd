@@ -1,6 +1,7 @@
 extends VBoxContainer
 
 signal materials_requested
+signal sources_requested
 
 const S := preload("res://game/ui/style.gd")
 const Stage := preload("res://game/ui/model_study.gd")
@@ -39,6 +40,7 @@ func _ready() -> void:
 		var button := S.button(entry, func(): _populate(entry))
 		tabs.add_child(button)
 	tabs.add_child(S.button("材料用途",func(): materials_requested.emit()))
+	tabs.add_child(S.button("获取方式",func(): sources_requested.emit()))
 	var cols := S.line(self)
 	cols.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var rail := S.column(cols,3)

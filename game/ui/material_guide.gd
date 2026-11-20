@@ -3,6 +3,7 @@ extends VBoxContainer
 signal returned
 
 const S := preload("res://game/ui/style.gd")
+const ItemSources := preload("res://game/ui/item_sources.gd")
 # Order breaks ties between equally short routes, favouring repeatable uses.
 const USES := {
 	"coal":["冶炼供热","在熔炉或营火点击加煤块，然后点火。一块可以燃烧 100 秒。"],
@@ -35,17 +36,30 @@ var recipes_by_input: Dictionary = {}
 var entries: Dictionary = {}
 var details: VBoxContainer
 var selected := ""
+var sources: ItemSources
 
-func setup(data: WastelandCatalog, initial: String, back_label: String) -> void:
+func setup(data: WastelandCatalog, initial: String, back_label: String, show_sources := false) -> void:
 	catalog = data
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
-	for key: String in catalog.recipes:
-		for ingredient: String in catalog.recipes[key].inputs:
-			if not recipes_by_input.has(ingredient):
-				recipes_by_input[ingredient] = []
-			recipes_by_input[ingredient].append(key)
+	if show_sources:
+		sources = ItemSources.new(catalog)
+	else:
+		for key: String in catalog.recipes:
+			for ingredient: String in catalog.recipes[key].inputs:
+				if not recipes_by_input.has(ingredient):
+					recipes_by_input[ingredient] = []
+				recipes_by_input[ingredient].append(key)
 	var bar := S.line(self)
-	bar.add_child(S.label("材料索引",20,S.MINT))
+	if show_sources:
+		var search := LineEdit.new()
+		search.name = "ItemSourceSearch"
+		search.placeholder_text = "搜索物品名称"
+		search.clear_button_enabled = true
+		search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		search.text_changed.connect(_filter_sources)
+		bar.add_child(search)
+	else:
+		bar.add_child(S.label("材料索引",20,S.MINT))
 	S.fill(bar)
 	bar.add_child(S.button(back_label,func(): returned.emit()))
 	var columns := S.line(self)
@@ -55,7 +69,7 @@ func setup(data: WastelandCatalog, initial: String, back_label: String) -> void:
 	var list := S.scroller(rail)
 	var group := ButtonGroup.new()
 	for id: String in catalog.items:
-		if not catalog.is_material(id): continue
+		if not show_sources and not catalog.is_material(id): continue
 		var button := S.button(catalog.title(id),select_material.bind(id))
 		button.toggle_mode = true
 		button.button_group = group
@@ -69,6 +83,20 @@ func setup(data: WastelandCatalog, initial: String, back_label: String) -> void:
 	select_material(initial if entries.has(initial) else "fiber")
 	# A link from the bag may target a material beyond the first visible row.
 	(list.get_parent() as ScrollContainer).ensure_control_visible.call_deferred(entries[selected])
+
+func _filter_sources(query: String) -> void:
+	var text := query.strip_edges().to_lower()
+	var first := ""
+	for id: String in entries:
+		var button: Button = entries[id]
+		button.visible = text.is_empty() or catalog.title(id).to_lower().contains(text) or id.contains(text)
+		if button.visible and first == "": first = id
+	if first == "":
+		selected = ""
+		_clear_details()
+		details.add_child(S.label("没有匹配的物品",18,S.MUTED))
+	elif selected == "" or not entries[selected].visible:
+		select_material(first)
 
 func use_paths(id: String) -> Array:
 	var paths := {id: [id]}
@@ -97,14 +125,21 @@ func use_paths(id: String) -> Array:
 		if routes.size() >= 3: break
 	return routes.slice(0,3)
 
-func select_material(id: String) -> void:
-	selected = id
-	entries[id].set_pressed_no_signal(true)
+func _clear_details() -> void:
 	for child in details.get_children():
 		details.remove_child(child)
 		child.queue_free()
 	(details.get_parent() as ScrollContainer).scroll_vertical = 0
+
+func select_material(id: String) -> void:
+	selected = id
+	entries[id].set_pressed_no_signal(true)
+	_clear_details()
 	details.add_child(S.label(catalog.title(id),26,S.TEXT))
+	if sources != null:
+		_show_sources("稳定获取",sources.stable[id],S.MINT)
+		_show_sources("随机获取",sources.random[id],S.GOLD)
+		return
 	for path: Array in use_paths(id):
 		var use: Array = USES[path.back()]
 		var names := PackedStringArray()
@@ -125,3 +160,9 @@ func select_material(id: String) -> void:
 		if not name.contains(product): name += " → " + product
 		details.add_child(S.label("%s ×%d　·　%s" % [name,int(recipe.amount),requirement],17,S.MINT,true))
 		details.add_child(S.label(catalog.requirements(recipe.inputs),16,S.MUTED,true))
+
+func _show_sources(title: String, rows: PackedStringArray, tint: Color) -> void:
+	if rows.is_empty(): return
+	details.add_child(S.label(title,19,tint))
+	for words in rows:
+		details.add_child(S.label(words,17,S.TEXT,true))

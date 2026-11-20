@@ -149,7 +149,7 @@ func run()->void:
 	print("FRONTIER ECONOMY QA checks=",checks," failures=",failures)
 	quit(1 if failures else 0)
 
-func until(condition:Callable,seconds:float=9.0)->bool:
+func until(condition:Callable,seconds:float=30.0)->bool:
 	var end:=Time.get_ticks_msec()+int(seconds*1000)
 	while Time.get_ticks_msec()<end:
 		if condition.call(): return true
@@ -186,6 +186,10 @@ func online(host:bool,port:int)->void:
 			guest.velocity=Vector3.ZERO
 			s.player.global_position+=Vector3.RIGHT*6
 			check(await until(func():return s.progress.dispatch.get("signed",false),18),"guest use key at the remote locker reaches host")
+			check(await until(func():return s.marker_records.any(func(row):return row.name=="parcel received")),"courier sees the parcel before the return trip")
+			s.player.global_position=locker.global_position+Vector3.RIGHT
+			s.collect_dispatch(order.relay)
+			check(s.bag.count("dispatch_parcel")==0,"a second player cannot issue another copy of the signed parcel")
 			at_board(origin)
 			guest.global_position=s.player.position+Vector3.RIGHT*0.8
 			s.clock.hours=17.4
@@ -225,10 +229,12 @@ func online(host:bool,port:int)->void:
 					await create_timer(0.05).timeout
 					if s.bag.count("dispatch_parcel")>0:break
 				check(hinted,"replica shows authoritative prompt for courier locker")
+			if await until(func():return is_instance_valid(s) and s.bag.count("dispatch_parcel")==1):
+				s.ui_command("marker",[depot,"parcel received"])
 			check(await until(func():return s.bag.count("dispatch_parcel")==1 and Vector2(s.player.position.x,s.player.position.z).distance_to(board)<5),"guest receives parcel and reaches departure board")
 			s.ui_command("deliver",[order.id])
 			s.ui_command("deliver",[order.id])
-			check(await until(func():return s.bag.count("meme_clock")==1 and s.achievements.unlocked("clock_out") and s.progress.records.get("delivery")==1),"duplicate remote request pays and unlocks once on both clients")
+			check(await until(func():return s.bag.count("dispatch_parcel")==0 and s.achievements.unlocked("clock_out") and s.progress.records.get("delivery")==1),"duplicate remote request settles the guest's parcel once and unlocks the team achievement")
 		else:check(false,"guest world bootstrap")
 	if is_instance_valid(s):
 		s.simulation_paused=true

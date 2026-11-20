@@ -4,7 +4,7 @@ extends Node
 const DEFAULT_PORT := 7357
 const DISCOVERY := preload("res://game/net/lan_discovery.gd")
 const MAX_PLAYERS := DISCOVERY.MAX_PLAYERS
-const PROTOCOL_VERSION := 2
+const PROTOCOL_VERSION := 3
 const HOST_ID := 1
 const JOIN_TIMEOUT_MS := 20000
 var discovery := DISCOVERY.new()
@@ -16,7 +16,7 @@ const KEYS := ["jump","sprint","crouch","use","fire","alternate","reload","shape
 	"slot_1","slot_2","slot_3","slot_4","slot_5","slot_6","slot_7","slot_8","offhand_use","swap_hands"]
 static var key_mask := (1 << KEYS.size()) - 1
 const DEVICE_COMMANDS := ["craft","cancel","collect","fuel","rest","enable","feed_fire","smelt_input"]
-static var ACTIONS := DEVICE_COMMANDS + ["slot","assign","assign_slot","quick_equip","offhand","swap_hands","consume","discard","learn","job","barter","deliver","dispatch","patrol_start","patrol_claim","rebuild_board","recover_archive","marker","unmark","vehicle","repair_vehicle","revive","chest_take","chest_put","chest_all","chest_close"]
+static var ACTIONS := DEVICE_COMMANDS + ["save","slot","assign","assign_slot","quick_equip","offhand","swap_hands","consume","discard","learn","job","barter","deliver","dispatch","patrol_start","patrol_claim","rebuild_board","recover_archive","marker","unmark","vehicle","repair_vehicle","revive","chest_take","chest_put","chest_all","chest_close"]
 const CONTEXT := ["interaction","building_hit","next_hint","hint","focus_damage","loot_target","loot_time","loot_full","loot_ratio",
 	"search_start","search_slot","search_held","action_lock","reload_id","reload_left","reload_span","heavy_charge","heavy_pending","shape","turn"]
 
@@ -42,10 +42,11 @@ class MemberState:
 	var pressed := 0
 	var updated_at := 0
 	var context: Dictionary = {}
-	var slot := 0
-	var offhand := ""
+	var bag: WastelandBag
+	var hand_queue: Array = []
 	var wire_endpoint: Variant
 	var downed := false
+	var save_requested := false
 	var commands: Array = []
 	var activity_budget := 0
 	var budget_tick := 0.0
@@ -83,7 +84,7 @@ const ACTORS_PER_PAGE := 5
 const FRAME_FIELDS := ["time","elapsed","active","hint","loot","target_hp","shape","turn","wave","ride","charge","reload","confirm","noise"]
 const PLAYER_FIELDS := ["point","health","profile","limits","crouch","body_height","eye_height","stamina","hunger","hydration","temp","bleed","infection","fracture","lamp","breath","provisions","sprain","wet"]
 const MOTION_FIELDS := ["member_swings","member_shots","swing_power","submerged","swimming","wet_feet","member_guard"]
-const PARTY_FIELDS := ["peer","at","yaw","speed","duck","swim","hidden","held","swings","shots","offhand","guard","flame","lamp","eye","pitch"]
+const PARTY_FIELDS := ["peer","at","yaw","speed","duck","swim","hidden","held","swings","shots","offhand","guard","flame","lamp","eye","pitch","loaded"]
 var applied_actor_frame := -1
 var posed_actor_frame := -1
 var actor_pages := {}
@@ -91,6 +92,7 @@ var replica_actors := []
 var client_timer := 0.0
 var connected_since := 0
 var shared_clock := 0.0
+var next_guest_save := 0
 
 func _ready() -> void:
 	multiplayer.peer_connected.connect(_registered)
@@ -164,6 +166,7 @@ func stop() -> void:
 	owner_state=null
 	local_pressed=0
 	client_timer=0.0
+	next_guest_save=0
 	replica_state.clear()
 	actor_pages.clear()
 	replica_actors.clear()
@@ -225,6 +228,8 @@ func _process(_delta:float) -> void:
 				state.next_name_receive=now+300
 				roster_changed=true
 		if roster_changed: _broadcast_roster()
+		if game.session.death_screen or game.session.simulation_paused:
+			_save_requested_guests(game.session,joined_members())
 	elif not active() and is_instance_valid(game.front) and game.front.visible and game.front.screen=="lan":
 		discovery.browse(_local_address)
 	elif discovery.browser != null:
@@ -260,12 +265,22 @@ func _welcome(protocol:int) -> void:
 		return
 	if local_token.is_empty():
 		var identity := ConfigFile.new()
-		identity.load(ID_PATH)
+		if FileAccess.file_exists(ID_PATH):
+			var read_error := identity.load(ID_PATH)
+			if read_error != OK:
+				stop()
+				game.connection_notice("无法读取本机联机身份 · 错误 %d" % read_error)
+				return
 		local_token = str(identity.get_value("coop", "identity", ""))
 		if local_token.length() != 32 or not local_token.is_valid_hex_number(false):
 			local_token = Crypto.new().generate_random_bytes(16).hex_encode()
 			identity.set_value("coop","identity",local_token)
-			identity.save(ID_PATH)
+			var write_error := identity.save(ID_PATH)
+			if write_error != OK:
+				local_token = ""
+				stop()
+				game.connection_notice("无法保存本机联机身份 · 错误 %d" % write_error)
+				return
 	_identify.rpc_id(HOST_ID,PROTOCOL_VERSION,local_token,game.options.appearance,game.options.player_name)
 
 @rpc("any_peer","call_remote","reliable",0)
@@ -282,13 +297,14 @@ func _identify(protocol:int, token: String, outfit: String, nickname: String) ->
 	state.nickname=WastelandSettings.clean_player_name(nickname)
 	var session: WastelandSession = game.session
 	var previous: Dictionary = session.guest_states.get(token, {})
-	state.slot=clampi(int(previous.get("slot",0)),0,7)
-	state.offhand=str(previous.get("offhand",""))
+	# Older worlds kept all items in the owner's bag and saved only the guest's selected slot.
+	state.bag=session.create_bag(previous.get("bag",{"active":previous.get("slot",0)}))
+	state.hand_queue=previous.get("hand_queue",[]).duplicate(true)
 	var member:=WastelandSurvivor.new()
 	state.survivor=member
 	session.add_child(member)
 	var at:=_spawn_near_owner(session,state)
-	member.configure(session,previous,at,false,outfit)
+	member.configure(session,previous,at,false,outfit,state.bag)
 	if member.global_position.distance_squared_to(at) > 80.0 * 80.0:
 		member.global_position = at
 	session.stream.ensure_landing(member.global_position)
@@ -301,12 +317,6 @@ func _identify(protocol:int, token: String, outfit: String, nickname: String) ->
 	state.avatar.apply_outfit(outfit)
 	state.avatar.set_player_name(state.nickname)
 	state.avatar.visible=not state.downed
-	# A reconnect may reclaim its old offhand only if another player has not
-	# already reserved all copies of that item in the shared bag.
-	var reserved:=_other_offhands(session,state.peer_id)
-	if not session.bag.catalog.items.has(state.offhand) or session.bag.count(state.offhand)<=reserved.count(state.offhand)+int(session.bag.is_worn(state.offhand)):
-		state.offhand=""
-	session.bag.partner_offhands=_other_offhands(session,HOST_ID)
 	for key in CONTEXT:
 		state.context[key]=session.get(key)
 	state.context.interaction={}
@@ -329,7 +339,7 @@ func _identify(protocol:int, token: String, outfit: String, nickname: String) ->
 	state.context.hint=""
 	session.audio.relay=cue
 	var payload: Dictionary={"settings":session.world_settings,"time":session.clock.hours,"elapsed":session.clock.elapsed,
-		"player":member.snapshot(),"bag":_guest_bag(session,state),"progress":session.progress.snapshot(),"acid_pools":session.fx.acid_snapshot(),
+		"player":member.snapshot(),"bag":state.bag.snapshot(),"hand_queue":state.hand_queue,"progress":session.progress.snapshot(),"acid_pools":session.fx.acid_snapshot(),
 		"acid_shots":session.fx.acid_flights(member.global_position),"acid_serial":session.fx.acid_serial,
 		"roster":_roster_rows(state.peer_id),"downed":state.downed}
 	_bootstrap.rpc_id(state.peer_id,payload)
@@ -345,33 +355,12 @@ func _spawn_near_owner(session:WastelandSession,state:MemberState) -> Vector3:
 	at.y=maxf(at.y,session.stream.ground_at(at)+0.14)
 	return at
 
-func _other_offhands(session:WastelandSession,except_peer:int)->Array[String]:
-	var result: Array[String]=[]
-	var current:=session.actor_peer_id
-	if except_peer!=HOST_ID:
-		var held:=session.bag.offhand if current==HOST_ID else owner_state.offhand
-		if not held.is_empty(): result.append(held)
-	for state:MemberState in joined_members():
-		if state.peer_id==except_peer: continue
-		var held:=session.bag.offhand if state.peer_id==current else state.offhand
-		if not held.is_empty(): result.append(held)
-	return result
-
-func _guest_bag(session:WastelandSession,state:MemberState)->Dictionary:
-	var bag:=session.bag
-	var saved:=bag.snapshot()
-	saved.active=state.slot
-	saved.partner_offhands=_other_offhands(session,state.peer_id)
-	saved.gear.erase("offhand")
-	if state.offhand!="": saved.gear.offhand=state.offhand
-	return saved
-
 func _store_member(state:MemberState) -> void:
 	if not is_instance_valid(state.survivor) or state.token.is_empty(): return
 	var saved:=state.survivor.snapshot()
 	saved.downed=state.downed
-	saved.offhand=state.offhand
-	saved.slot=state.slot
+	saved.bag=state.bag.snapshot()
+	saved.hand_queue=state.hand_queue.duplicate(true)
 	state.survivor.session.guest_states[state.token]=saved
 
 func store_guests(session:WastelandSession) -> void:
@@ -393,11 +382,11 @@ func _remove_member(peer:int,announce:bool) -> void:
 	session.construction.tool_jobs.erase(state.survivor.get_instance_id())
 	if is_instance_valid(state.survivor.mount_vehicle): state.survivor.dismount(true)
 	state.survivor.queue_free()
-	session.bag.partner_offhands=_other_offhands(session,HOST_ID)
 	if announce:
+		var result:=session.save_now(false)
 		_broadcast_roster()
 		invalidate_world()
-		session.notify("队友已离开")
+		session.notify("队友已离开" if result==OK else "队友已离开，世界保存失败 · 错误 %d" % result)
 
 func _connected() -> void:
 	if not host and transport!=null:
@@ -542,7 +531,11 @@ func send_request(id: String, args: Array) -> void:
 @rpc("any_peer","call_remote","reliable",2)
 func _invoke(id: String,args: Array) -> void:
 	var state:=_sender()
-	if state!=null and id in ACTIONS and args.size()<=3 and state.commands.size()<18:
+	if state==null: return
+	if id=="save":
+		if args.is_empty(): state.save_requested=true
+		return
+	if id in ACTIONS and args.size()<=3 and state.commands.size()<18:
 		if var_to_bytes(args).size()<=1024 and _spend_budget(state):
 			state.commands.append([id,args])
 
@@ -585,6 +578,7 @@ func host_tick(session: WastelandSession,delta:float) -> void:
 	# run; every recipient sees the same tick of the rest of the team.
 	for state:MemberState in joined:
 		_tick_member(session,state,delta)
+	_save_requested_guests(session,joined)
 	var party:Array=[]
 	for state:MemberState in joined:
 		state.fast_timer-=delta
@@ -598,12 +592,30 @@ func host_tick(session: WastelandSession,delta:float) -> void:
 			_send_world(session,state)
 			_send_slow_details(session,state)
 
+func _save_requested_guests(session:WastelandSession,joined:Array[MemberState])->void:
+	var now:=Time.get_ticks_msec()
+	if now<next_guest_save: return
+	var requests:=joined.filter(func(member:MemberState): return member.save_requested)
+	if requests.is_empty(): return
+	next_guest_save=now+3000
+	var result:=session.save_now(false)
+	for state:MemberState in requests:
+		state.save_requested=false
+		_save_result.rpc_id(state.peer_id,result)
+
+@rpc("authority","call_remote","reliable",0)
+func _save_result(result:int)->void:
+	if not host and is_instance_valid(game.session) and game.session.replica:
+		game.connection_notice("世界已保存" if result==OK else "保存失败 · 错误 %d" % result)
+
 func _tick_member(session:WastelandSession,state:MemberState,delta:float)->void:
 	var member:=state.survivor
 	state.budget_tick+=delta
 	if state.budget_tick>=1.0:
 		state.activity_budget=0
 		state.budget_tick=0.0
+	if not state.downed and not state.hand_queue.is_empty() and float(state.hand_queue[0].done)<=session.clock.elapsed:
+		_as_member(session,state,session._finish_crafting)
 	if not state.input.is_empty():
 		var nearby:=member.global_position.distance_to(session.player.global_position)<84.0
 		var fresh:=Time.get_ticks_msec()-state.updated_at<750
@@ -638,10 +650,10 @@ func _tick_member(session:WastelandSession,state:MemberState,delta:float)->void:
 			_as_member(session,state,func(): session.apply_ui_command(str(action[0]),action[1]))
 	var avatar:=state.avatar
 	if is_instance_valid(avatar):
-		avatar.wear_loadout(session.bag.gear)
-		avatar.set_offhand(state.offhand,member.guarding,member.flashlight and not member.submerged)
+		avatar.wear_loadout(state.bag.gear)
+		avatar.set_offhand(state.bag.offhand,member.guarding,member.flashlight and not member.submerged)
 		avatar.visible=not state.appearance.is_empty() and not state.downed and not is_instance_valid(member.mount_vehicle)
-		_avatar_motion(avatar,session.catalog,member.hand.model_id,member.hand.swing_serial,member.hand.shot_serial,int(session.bag.magazine.get(member.hand.model_id,0))>0)
+		_avatar_motion(avatar,session.catalog,member.hand.model_id,member.hand.swing_serial,member.hand.shot_serial,int(state.bag.magazine.get(member.hand.model_id,0))>0)
 		avatar.pose(delta,Vector2(member.velocity.x,member.velocity.z).length(),member.crouch,member.swimming)
 
 func _send_slow_details(session:WastelandSession,state:MemberState)->void:
@@ -679,23 +691,17 @@ func _chest_update(key:String,view:Dictionary)->void:
 	if view.is_empty(): game.close_overlay()
 
 func _capture_actor(session:WastelandSession,state:MemberState)->void:
-	state.slot=session.bag.active
-	state.offhand=session.bag.offhand
+	state.bag=session.bag
+	state.hand_queue=session.hand_queue
 	state.wire_endpoint=session.construction.selected_wire
 	for key in CONTEXT: state.context[key]=session.get(key)
 
 func _restore_actor(session:WastelandSession,state:MemberState)->void:
-	var reserved:=_other_offhands(session,state.peer_id)
 	session.player=state.survivor
 	active_member=state if state.peer_id!=HOST_ID else null
 	session.actor_peer_id=state.peer_id
-	session.bag.active=state.slot
-	session.bag.partner_offhands=reserved
-	session.bag.gear.erase("offhand")
-	if state.offhand!="" and session.bag.available_count(state.offhand)>int(session.bag.is_worn(state.offhand)):
-		session.bag.gear.offhand=state.offhand
-	else:
-		state.offhand=""
+	session.bag=state.bag
+	session.hand_queue=state.hand_queue
 	session.construction.selected_wire=state.wire_endpoint
 	for key in CONTEXT: session.set(key,state.context[key])
 
@@ -724,15 +730,6 @@ func as_survivor(session:WastelandSession,victim:WastelandSurvivor,callback:Call
 	if state==null: return false
 	_as_member(session,state,callback)
 	return true
-
-func team_uses_last_mainhand(session:WastelandSession,id:String)->bool:
-	var peer:=session.actor_peer_id
-	if peer!=HOST_ID and owner_state!=null and session.bag.partner_needs_last_mainhand(id,owner_state.slot,owner_state.offhand):
-		return true
-	for state:MemberState in joined_members():
-		if state.peer_id!=peer and session.bag.partner_needs_last_mainhand(id,state.slot,state.offhand):
-			return true
-	return false
 
 func member_failed(state:MemberState) -> void:
 	if not server() or state.downed:
@@ -892,15 +889,15 @@ func _infected_fx(kind: String, point: Vector3, normal: Vector3) -> void:
 		game.session.fx.infected_effect(kind,point,normal)
 
 func _party_motion(session:WastelandSession,joined:Array[MemberState])->Array:
-	var rows:Array=[_motion_row(HOST_ID,session.player,session.bag.offhand,session.death_screen)]
+	var rows:Array=[_motion_row(HOST_ID,session.player,session.bag,session.death_screen)]
 	for state:MemberState in joined:
-		rows.append(_motion_row(state.peer_id,state.survivor,state.offhand,state.downed))
+		rows.append(_motion_row(state.peer_id,state.survivor,state.bag,state.downed))
 	return rows
 
-func _motion_row(peer:int,person:WastelandSurvivor,offhand:String,downed:bool)->Array:
+func _motion_row(peer:int,person:WastelandSurvivor,bag:WastelandBag,downed:bool)->Array:
 	return [peer,person.global_position,person.rotation.y,Vector2(person.velocity.x,person.velocity.z).length(),person.crouch,person.swimming,
-		downed or is_instance_valid(person.mount_vehicle),person.hand.model_id,person.hand.swing_serial,person.hand.shot_serial,offhand,person.guarding,
-		person.flashlight and not person.submerged,person.headlamp.visible,person.eyes.position.y,person.pitch]
+		downed or is_instance_valid(person.mount_vehicle),person.hand.model_id,person.hand.swing_serial,person.hand.shot_serial,bag.offhand,person.guarding,
+		person.flashlight and not person.submerged,person.headlamp.visible,person.eyes.position.y,person.pitch,int(bag.magazine.get(person.hand.model_id,0))>0]
 
 func _send_fast(session: WastelandSession,state:MemberState,party:Array) -> void:
 	var member:=state.survivor
@@ -915,7 +912,7 @@ func _send_fast(session: WastelandSession,state:MemberState,party:Array) -> void
 		"member_guard":member.guarding,
 		"member_swings":member.hand.swing_serial,"member_shots":member.hand.shot_serial,"swing_power":member.hand.swing_force,
 		"submerged":member.submerged,"swimming":member.swimming,"wet_feet":member.wet_feet,
-		"active":state.slot,"hint":state.context.hint,"loot":state.context.loot_ratio,"target_hp":state.context.focus_damage,
+		"active":state.bag.active,"hint":state.context.hint,"loot":state.context.loot_ratio,"target_hp":state.context.focus_damage,
 		"confirm":Vector3i(member.confirmed_hit,int(member.confirmed_head),int(member.confirmed_melee)),"noise":Vector2(member.recent_noise,member.noise_until),
 		"shape":state.context.shape,"turn":state.context.turn,"wave":session.hordes.wave_index,
 		"ride":member.mount_vehicle.id if is_instance_valid(member.mount_vehicle) else "","charge":state.context.heavy_charge,
@@ -1013,11 +1010,13 @@ func _send_world(session:WastelandSession,state:MemberState) -> void:
 		if maxi(d.x,d.y)<=6:
 			crops[cell]=session.construction.crops[cell]
 	var wires:=session.construction.wires.filter(func(row): return blocks.has(row[0]) and blocks.has(row[1]))
+	var loadouts:Dictionary={HOST_ID:session.bag.gear}
+	for teammate:MemberState in joined_members():
+		if teammate!=state: loadouts[teammate.peer_id]=teammate.bag.gear
 	var snapshot: Dictionary={"diffs":chunks,"digs":excavations,"blocks":blocks,"crops":crops,"wires":wires,
-		"bag":_guest_bag(session,state),"progress":session.progress.snapshot(),"queue":session.hand_queue,
-		"vehicles":_near_records(session.vehicle_records,member.global_position),"drops":_near_records(session.fx.drop_records,member.global_position),
+		"bag":state.bag.snapshot(),"loadouts":loadouts,"progress":session.progress.snapshot(),"queue":state.hand_queue,
+		"vehicles":_near_records(session.vehicle_records,member.global_position),"drops":session.fx.nearby_drops(member.global_position,142.0),
 		"markers":session.marker_records,"discovered":session.stream.discovered,"powered":session.construction.powered}
-	snapshot.bag.active=state.slot
 	snapshot.falling_trees=session.timber.snapshot()
 	snapshot.lids=session.chest_lids()
 	snapshot.threat=session.hordes.regional_snapshot(location)
@@ -1053,10 +1052,12 @@ func _apply_world(session:WastelandSession,row:Dictionary) -> void:
 	session.bag.counts=row.bag.counts
 	session.bag.bar=row.bag.bar
 	session.bag.automatic_shortcuts=row.bag.get("automatic_shortcuts",{})
-	session.bag.partner_offhands.assign(row.bag.get("partner_offhands",[]))
 	session.bag.restore_gear(row.bag)
 	session.bag.magazine=row.bag.magazine
 	session.hand_queue=row.queue
+	for peer:int in row.loadouts:
+		var view:ReplicaMember=replicas.get(peer)
+		if view!=null: view.avatar.wear_loadout(row.loadouts[peer])
 	var previous_awards:=session.progress.achieved
 	session.progress=WastelandProgression.new(row.progress)
 	var new_awards := session.progress.achieved.keys().filter(func(id):return not previous_awards.has(id))
@@ -1192,12 +1193,11 @@ func _pose_party(session:WastelandSession,dt:float)->void:
 		var row:=view.motion
 		var avatar:=view.avatar
 		avatar.visible=not bool(row.hidden)
-		avatar.wear_loadout(session.bag.gear)
 		avatar.set_offhand(row.offhand,row.guard,row.flame)
 		avatar.global_position=avatar.global_position.lerp(row.at,1.0 if avatar.global_position.distance_to(row.at)>12.0 else minf(1.0,dt*12.0))
 		avatar.rotation.y=lerp_angle(avatar.rotation.y,float(row.yaw),minf(1.0,dt*14.0))
 		var held:=str(row.held)
-		_avatar_motion(avatar,session.catalog,held,int(row.swings),int(row.shots),int(session.bag.magazine.get(held,0))>0)
+		_avatar_motion(avatar,session.catalog,held,int(row.swings),int(row.shots),bool(row.loaded))
 		avatar.pose(dt,float(row.speed),float(row.duck),bool(row.swim))
 		view.lamp.position.y=float(row.eye)
 		view.lamp.rotation.x=float(row.pitch)

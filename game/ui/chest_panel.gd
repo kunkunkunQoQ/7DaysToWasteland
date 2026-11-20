@@ -64,7 +64,7 @@ func refresh()->void:
 		out_of_reach.emit()
 		return
 	had_view=not view.is_empty()
-	var next_hash:=hash([view,session.bag.counts,session.bag.capacity(),session.bag.partner_offhands,selected,selected_side,selected_count])
+	var next_hash:=hash([view,session.bag.counts,session.bag.capacity(),selected,selected_side,selected_count])
 	if next_hash==fingerprint: return
 	fingerprint=next_hash
 	var contents:Dictionary=view.get("items",{})
@@ -86,7 +86,7 @@ func refresh()->void:
 	single.disabled=selected.is_empty() or view.is_empty() or cap<=0
 	stack.disabled=single.disabled
 	if selected!="" and cap<=0:
-		choice.text+="　·　"+("队友持用中" if not take and session.bag.available_count(selected)<=0 else "背包已满" if take else "箱子已满")
+		choice.text+="　·　"+("背包已满" if take else "箱子已满")
 	everything.disabled=view.is_empty() or not contents.keys().any(func(id):return session.bag.room_for(id)>0)
 
 func _grid(side:String,items:Dictionary,capacity:int)->void:

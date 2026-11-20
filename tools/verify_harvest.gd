@@ -107,6 +107,8 @@ func run() -> void:
 		var primary: String=spec[2].keys()[0]
 		var expected:=roundi(float(spec[2][primary])*1.4)+(1 if primary==sample else 0)
 		check(session.bag.count(primary)==expected and session.progress.records.get("gather_"+kind,0)==1,"one-shot specialist harvest awards the exact premium yield and one discovery: "+kind)
+		if kind=="machine_wreck":
+			check(session.bag.count("spring")==3 and session.bag.count("scrap")==9 and session.bag.count("parts")==0,"wrench recovers springs and scrap, including the loose scrap sample")
 	await close_world()
 	print("HARVEST QA passed=%d failed=%d"%[passed,failures])
 	quit(1 if failures else 0)

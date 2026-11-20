@@ -40,6 +40,7 @@ func run()->void:
 	await test_portraits()
 	await test_field_gear()
 	test_losses()
+	await test_autosave()
 	session.simulation_paused=true
 	await session.stream.quiesce()
 	app._remove_session()
@@ -48,6 +49,7 @@ func run()->void:
 	var cleanup_deadline:=Time.get_ticks_msec()+450
 	while Time.get_ticks_msec()<cleanup_deadline: await process_frame
 	WastelandSave.delete_slot(1)
+	WastelandSave.delete_slot(2)
 	print("EQUIPMENT QA passed=%d failed=%d"%[passed,failed])
 	quit(1 if failed else 0)
 
@@ -308,3 +310,62 @@ func test_losses()->void:
 	for record:Dictionary in session.fx.drop_records.values():
 		if record.items.get("work_gloves")==1 and record.items.get("oilskin_vest")==1 and record.items.get("trail_boots")==1: found=true
 	check(found,"lost equipped pieces enter the death drop")
+
+func wait_for_autosave(condition:Callable)->bool:
+	var deadline:=Time.get_ticks_msec()+10000
+	while Time.get_ticks_msec()<deadline:
+		if condition.call(): return true
+		await create_timer(0.10).timeout
+	return condition.call()
+
+func test_autosave()->void:
+	await session.stream.quiesce()
+	app._enter_world(app._default_config(),{},2,false)
+	session=app.session
+	session.bag.add("pistol",1)
+	session.bag.add("hardhat",1)
+	session.bag.add("round",3)
+	session.start_reload("pistol")
+	session._tick_reload(session.reload_span+0.1)
+	check(session.save_now(false)==OK and session.bag.magazine.get("pistol")==3,"save a loaded pistol and unequipped helmet as the starting point")
+	var expected:=session.bag.snapshot()
+	var saves:Array[int]=[]
+	session.stored.connect(func(slot:int): saves.append(slot))
+	var shots:=session.player.hand.shot_serial
+	Input.action_press("fire")
+	session._process_controls(0.016)
+	Input.action_release("fire")
+	app._pause()
+	var paused_time:=session.clock.elapsed
+	expected.magazine.pistol=2
+	check(session.bag.snapshot()==expected and session.player.hand.shot_serial==shots+1,"firing once changes only the magazine in the backpack")
+	check(await wait_for_autosave(func():return saves.size()>=1) and WastelandSave.read(2).bag==expected and session.clock.elapsed==paused_time,"a shot autosaves to disk while the single-player pause menu is open")
+
+	app.close_overlay()
+	session.ui_command("consume",["hardhat"])
+	app._pause()
+	expected.gear.head="hardhat"
+	check(await wait_for_autosave(func():return saves.size()>=2) and WastelandSave.read(2).bag==expected,"wearing a helmet autosaves even when item counts and magazine are unchanged")
+
+	# A directory at this test world's temporary filename prevents the next write.
+	var blocked_path:=WastelandSave.path_for(2)+".tmp"
+	var block_error:=DirAccess.make_dir_absolute(blocked_path)
+	check(block_error==OK,"temporarily block writes to the isolated world")
+	if block_error!=OK: return
+	var errors:Array[String]=[]
+	session.message.connect(func(words:String,_seconds:float):
+		if words.begins_with("自动保存失败"): errors.append(words))
+	app.close_overlay()
+	session.ui_command("slot",[3])
+	app._pause()
+	check(await wait_for_autosave(func():return not errors.is_empty()) and saves.size()==2 and WastelandSave.read(2).bag==expected,"a failed shortcut-only autosave reports the error and preserves the last complete file")
+	check(DirAccess.remove_absolute(blocked_path)==OK,"restore write access to the test world")
+	expected.active=3
+	check(await wait_for_autosave(func():return saves.size()>=3) and WastelandSave.read(2).bag==expected,"the pending shortcut change reaches disk on retry without touching the backpack again")
+
+	var previous_session:=session.get_instance_id()
+	await session.stream.quiesce()
+	app.open_world(2)
+	var reopened:=await wait_for_autosave(func():return app.session.get_instance_id()!=previous_session)
+	session=app.session
+	check(reopened and session.bag.snapshot()==expected,"normal world load restores the autosaved rounds, worn gear and active shortcut")

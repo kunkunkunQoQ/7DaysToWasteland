@@ -3,6 +3,7 @@ extends RefCounted
 const Chest := preload("res://game/art/supply_chest.gd")
 const Containers := preload("res://game/world/regional_caches.gd")
 const RINGS := 6
+const CHEST_TABLES := ["weapons","safe","medical","garage_spares"]
 const ARCH := [Vector2(-2.35,-0.65),Vector2(-2.30,1.9),Vector2(-1.55,2.85),Vector2(0,3.2),Vector2(1.65,2.75),Vector2(2.37,1.8),Vector2(2.40,-0.65)]
 
 static func location(chunk: WastelandChunk) -> Vector3:
@@ -81,7 +82,7 @@ static func build(chunk: WastelandChunk) -> void:
 	var mouth := ground_point(chunk,0,4.8)
 	WastelandSite.board_door(chunk,mouth,4.55,"cave/boards")
 	_waterfall(chunk,ground_point(chunk,-1.5,5.12))
-	var table: String = ["weapons","safe","medical","garage_spares"][rng.randi_range(0,3)]
+	var table: String = CHEST_TABLES[rng.randi_range(0,CHEST_TABLES.size()-1)]
 	var chest_at := ground_point(chunk,-0.55,-4.05) + Vector3.UP * (Chest.DIMENSIONS.ridge.y*0.5)
 	Containers.spawn(chunk,"nest/cache",table,chest_at,{"cache_floor":0,"cache_approach":chunk.position+chest_at+Vector3.BACK*1.3},"ridge")
 	chunk.sleeper_anchors.append(ground_point(chunk,1.1,-2.1))

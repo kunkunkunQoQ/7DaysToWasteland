@@ -161,7 +161,8 @@ func _first_axe(pos: Vector2, align_right:=false) -> void:
 			next="[%s] %s" % [session.options.action_name("use"),actions.get(id,"收集"+session.catalog.title(id))]
 			if id=="fiber":
 				next="[%s] 打破草丛，走近拾取纤维" % session.options.action_name("fire")
-				for row:Dictionary in session.fx.drop_records.values():
+				for drop_id:String in session.fx.drop_live:
+					var row:Dictionary=session.fx.drop_records[drop_id]
 					if row.items.has("fiber") and session.player.global_position.distance_squared_to(row.point)<25:
 						next="走近地上的植物纤维即可拾取"
 						break

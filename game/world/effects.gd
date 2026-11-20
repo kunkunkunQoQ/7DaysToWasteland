@@ -23,6 +23,7 @@ var pools: Array[Dictionary] = []
 var acid_glob := SphereMesh.new()
 var drops: Array[StaticBody3D] = []
 var drop_records: Dictionary = {}
+var drop_chunks: Dictionary = {}
 var drop_live: Dictionary = {}
 var serial := 0
 var acid_serial := 0
@@ -44,6 +45,7 @@ func configure(owner_session: Node3D, snapshot: Dictionary) -> void:
 	serial = int(snapshot.get("drop_serial", 0))
 	for key in drop_records:
 		if str(key).is_valid_int(): serial=maxi(serial,int(key))
+		_index_drop(key,_drop_cell(drop_records[key].point))
 	for index in PARTICLES:
 		var fx := GPUParticles3D.new()
 		fx.amount = 15
@@ -243,7 +245,7 @@ func _aim_shot(node: MeshInstance3D, velocity: Vector3) -> void:
 	var direction := velocity.normalized()
 	node.look_at(node.global_position + direction,Vector3.RIGHT if absf(direction.y) > 0.995 else Vector3.UP)
 
-func add_items(at: Vector3, items: Dictionary, impulse:=Vector3.INF, discarded:=false, log_section: Dictionary = {}, leaf_model := "") -> void:
+func add_items(at: Vector3, items: Dictionary, impulse:=Vector3.INF, discarded:=false, log_section: Dictionary = {}, leaf_model := "", loose_material := false) -> void:
 	if items.is_empty() or session.replica:
 		return
 	serial += 1
@@ -251,7 +253,8 @@ func add_items(at: Vector3, items: Dictionary, impulse:=Vector3.INF, discarded:=
 	if not impulse.is_finite():
 		var turn:=Vector2.from_angle(serial*2.39996)
 		impulse=Vector3(turn.x*0.62,0.72,turn.y*0.62)
-	drop_records[id] = {"items": items.duplicate(), "point": at, "velocity":impulse}
+	store_drop(id,{"items":items.duplicate(),"point":at,"velocity":impulse})
+	if loose_material: drop_records[id].loose_material=true
 	if not log_section.is_empty(): drop_records[id].log_section = log_section
 	if items.size()==1 and items.has("tree_leaf"):
 		drop_records[id].leaf_phase = fposmod(serial*1.79,TAU)
@@ -264,11 +267,37 @@ func add_items(at: Vector3, items: Dictionary, impulse:=Vector3.INF, discarded:=
 		_show_drop(id)
 	if is_instance_valid(session.network) and session.network.server(): session.network.invalidate_world()
 
+func _item_summary(items: Dictionary, limit: int) -> String:
+	if items.size() <= limit: return session.catalog.requirements(items)
+	var first := {}
+	for item: String in items:
+		first[item] = items[item]
+		if first.size() == limit: break
+	return "%s 等 %d 种" % [session.catalog.requirements(first), items.size()]
+
+func pickup_hint(id: String, use: String) -> String:
+	var row: Dictionary = drop_records.get(id, {})
+	if row.is_empty(): return ""
+	var items: Dictionary = row.items
+	var action := "[%s] 打捞浮标" % use if row.get("buoy", false) else "靠近拾取"
+	if not items.keys().any(func(item): return session.bag.room_for(item) > 0):
+		action = "背包已满"
+	return _item_summary(items, 2) + " · " + action
+
+func _notify_pickup(received: Dictionary, remaining: Dictionary, buoy: bool) -> void:
+	var words := "背包已满"
+	if not received.is_empty():
+		words = ("已打捞 " if buoy else "已拾取 ") + _item_summary(received, 4 if remaining.is_empty() else 2)
+	if not remaining.is_empty():
+		words += ("，浮标内剩余 " if buoy else "，地上剩余 ") + _item_summary(remaining, 2)
+	session.notify(words)
+
 func collect_nearby() -> void:
 	if session.replica or drop_live.is_empty(): return
 	var survivor:WastelandSurvivor=session.player
 	var reach:=survivor.global_position+Vector3.UP*survivor.eyes.position.y*0.45
-	var collected:=0
+	var received := {}
+	var remainders: Array[Dictionary] = []
 	for id:String in drop_live.keys():
 		var row:Dictionary=drop_records[id]
 		if row.get("buoy",false) or session.clock.elapsed<float(row.get("pickup_after",0.0)): continue
@@ -284,29 +313,62 @@ func collect_nearby() -> void:
 		if reach.distance_squared_to(point)>PICKUP_RADIUS*PICKUP_RADIUS: continue
 		var ray:=PhysicsRayQueryParameters3D.create(reach,point,1|2)
 		if not get_world_3d().direct_space_state.intersect_ray(ray).is_empty(): continue
-		collected+=take_drop(id,true)
-	if collected>0: session.notify("拾取物资 ×%d"%collected)
+		_transfer_drop(id, row, received)
+		if not row.items.is_empty(): remainders.append(row.items)
+	if received.is_empty(): return
+	var remaining := {}
+	for pile: Dictionary in remainders:
+		for item: String in pile:
+			remaining[item] = int(remaining.get(item, 0)) + int(pile[item])
+	_notify_pickup(received, remaining, false)
 
 func take_drop(id: String, automatic:=false) -> int:
 	if session.replica or not drop_records.has(id):
 		return 0
-	var moved: int = session.bag.transfer(drop_records[id].items)
-	if moved == 0:
-		if not automatic: session.notify("背包已满")
-		return 0
-	var buoy := bool(drop_records[id].get("buoy", false))
-	if not automatic: session.notify(("打捞浮标物资 ×%d" if buoy else "拾取物资 ×%d") % moved)
-	if drop_records[id].items.is_empty():
-		if buoy:
+	var row: Dictionary = drop_records[id]
+	var received := {}
+	var moved := _transfer_drop(id, row, received)
+	if not automatic: _notify_pickup(received, row.items, row.get("buoy", false))
+	return moved
+
+func _transfer_drop(id: String, row: Dictionary, received: Dictionary) -> int:
+	var wood_before := int(row.items.get("wood",0))
+	var moved: int = session.bag.transfer(row.items, received)
+	if moved == 0: return 0
+	if wood_before>0 and (row.has("log_section") or row.get("loose_material",false)):
+		session.achievements.add("collected_wood",wood_before-int(row.items.get("wood",0)))
+	if row.items.is_empty():
+		if row.get("buoy", false):
 			session.gain(36, "salvage_buoy")
-		drop_records.erase(id)
-		if drop_live.has(id):
-			_release_drop(id)
+		erase_drop(id)
 	else:
-		if drop_live.has(id): _dress_drop(drop_live[id],drop_records[id])
-		if not buoy: drop_records[id].erase("resting")
+		if drop_live.has(id): _dress_drop(drop_live[id], row)
+		if not row.get("buoy", false): row.erase("resting")
 	if is_instance_valid(session.network) and session.network.server(): session.network.invalidate_world()
 	return moved
+
+func _drop_cell(point: Vector3) -> Vector2i:
+	return WastelandTerrainGen.chunk_at(Vector2(point.x,point.z))
+
+func _index_drop(id: String, cell: Vector2i) -> void:
+	var bucket: Dictionary=drop_chunks.get_or_add(cell,{})
+	bucket[id]=true
+
+func _unindex_drop(id: String, cell: Vector2i) -> void:
+	var bucket: Dictionary=drop_chunks[cell]
+	bucket.erase(id)
+	if bucket.is_empty(): drop_chunks.erase(cell)
+
+func store_drop(id: String, row: Dictionary) -> void:
+	if drop_records.has(id): erase_drop(id)
+	drop_records[id]=row
+	_index_drop(id,_drop_cell(row.point))
+
+func erase_drop(id: String) -> void:
+	if not drop_records.has(id): return
+	_unindex_drop(id,_drop_cell(drop_records[id].point))
+	drop_records.erase(id)
+	if drop_live.has(id): _release_drop(id)
 
 func _release_drop(id: String) -> void:
 	var body: StaticBody3D = drop_live[id]
@@ -421,19 +483,76 @@ func _pose_log(body: StaticBody3D, log: Dictionary) -> void:
 func _observer_distance_squared(point: Vector3) -> float:
 	return session.team_distance_squared(point)
 
+func _near_buckets(point: Vector3, radius: float) -> Array[Dictionary]:
+	var buckets: Array[Dictionary]=[]
+	var extent:=Vector3(radius,0,radius)
+	var first:=_drop_cell(point-extent)
+	var last:=_drop_cell(point+extent)
+	for z in range(first.y,last.y+1):
+		for x in range(first.x,last.x+1):
+			var cell:=Vector2i(x,z)
+			if drop_chunks.has(cell): buckets.append(drop_chunks[cell])
+	return buckets
+
+func nearby_drops(point: Vector3, radius: float) -> Dictionary:
+	var found: Dictionary={}
+	var squared:=radius*radius
+	for bucket in _near_buckets(point,radius):
+		for id: String in bucket:
+			var row: Dictionary=drop_records[id]
+			if point.distance_squared_to(row.point)<squared: found[id]=row
+	return found
+
+# Only the host's live, settled harvest/debris can donate to a stack. The
+# bounded live pool also bounds the work per refresh after loading a large camp.
+func _stack_resting_materials() -> void:
+	var open: Dictionary={}
+	var changed:=false
+	for id: String in drop_live.keys():
+		var row: Dictionary=drop_records[id]
+		if not row.get("loose_material",false) or not row.get("resting",false): continue
+		# A newly activated record may be visible before its terrain and walls
+		# are loaded. Wait until a wall check is meaningful on both sides.
+		if not session.stream.at_surface(row.point): continue
+		var items: Dictionary=row.items
+		var item: String=items.keys().front()
+		var limit: int=session.bag.stack_size(item)
+		if int(items[item])>=limit: continue
+		var stacks: Array=open.get_or_add(item,[])
+		var point: Vector3=row.point
+		for target: Dictionary in stacks:
+			var room:=limit-int(target.items[item])
+			if room<=0 or point.distance_squared_to(target.point)>0.8*0.8: continue
+			if not point.is_equal_approx(target.point):
+				var path:=PhysicsRayQueryParameters3D.create(point,target.point,1|2)
+				if not get_world_3d().direct_space_state.intersect_ray(path).is_empty(): continue
+			var amount:=mini(room,int(items[item]))
+			target.items[item]+=amount
+			items[item]-=amount
+			changed=true
+			if int(items[item])==0: break
+		if int(items[item])==0: erase_drop(id)
+		else: stacks.append(row)
+	if changed and is_instance_valid(session.network) and session.network.server():
+		session.network.invalidate_world()
+
 func _resync_drops() -> void:
 	if not is_instance_valid(session.player):
 		return
-	var nearby:Array=[]
-	for id in drop_records:
-		var distance:=_observer_distance_squared(drop_records[id].point)
-		var radius:=72.0 if drop_live.has(id) else 65.0
-		if distance<=radius*radius: nearby.append([distance,id])
-	if nearby.size()>DROPS:
-		nearby.sort_custom(func(a,b): return a[0]<b[0] if a[0]!=b[0] else a[1]<b[1])
-		nearby.resize(DROPS)
-	var selected:Dictionary={}
-	for entry in nearby: selected[entry[1]]=true
+	if not session.replica: _stack_resting_materials()
+	var selected: Dictionary={}
+	for person: WastelandSurvivor in session.living_players():
+		var at:=person.global_position
+		for bucket in _near_buckets(at,72.0):
+			for id: String in bucket:
+				var distance:=at.distance_squared_to(drop_records[id].point)
+				var radius:=72.0 if drop_live.has(id) else 65.0
+				if distance<=radius*radius and distance<float(selected.get(id,INF)):
+					selected[id]=distance
+	if selected.size()>DROPS:
+		var ids:=selected.keys()
+		ids.sort_custom(func(a,b): return selected[a]<selected[b] if selected[a]!=selected[b] else a<b)
+		for i in range(DROPS,ids.size()): selected.erase(ids[i])
 	for id in drop_live.keys():
 		if not selected.has(id): _release_drop(id)
 	for id in selected:
@@ -459,6 +578,8 @@ func apply_drop_snapshot(records:Dictionary)->void:
 	for id in drop_live.keys():
 		if not records.has(id): _release_drop(id)
 	drop_records=records
+	drop_chunks.clear()
+	for id: String in records: _index_drop(id,_drop_cell(records[id].point))
 	_resync_drops()
 	replica_motion.clear()
 	for id in drop_live:
@@ -575,6 +696,13 @@ func _step_drop(body:StaticBody3D,row:Dictionary,dt:float)->void:
 		row.erase("resting")
 		row.velocity=v
 	body.global_position=point
+	if not session.replica:
+		var previous:=_drop_cell(row.point)
+		var current:=_drop_cell(point)
+		if previous!=current:
+			var id: String=body.get_meta("drop_id")
+			_unindex_drop(id,previous)
+			_index_drop(id,current)
 	row.point=point
 	if leaf:
 		if floating: row.leaf_normal = Vector3.UP

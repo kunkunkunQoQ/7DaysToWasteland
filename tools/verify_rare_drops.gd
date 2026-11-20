@@ -45,12 +45,16 @@ func run() -> void:
 			actor.take_hit(9999,at)
 			awards+=1
 			var actual:Dictionary=world.fx.drop_records.get(str(world.fx.serial),{}).get("items",{})
-			check(not actor.active and world.fx.serial>before and actual.has(id) and world.catalog.items.has(id),"real lethal hit yields collectible "+id)
+			check(world.fx.serial>before and actual.has(id) and world.catalog.items.has(id),"real lethal hit yields collectible "+id)
 			world.fx.take_drop(str(world.fx.serial))
 			check(world.bag.count(id)==1,"world drop can be picked up: "+id)
 			var after:=director.trophy_rng.state
 			director.defeated(actor)
 			check(director.trophy_rng.state==after and int(world.progress.records.get("rare_drop",0))==awards,"duplicate defeat consumes no roll or award")
+			if not actor.spec.get("animal",false):
+				check(actor.active and actor.brain.state==WastelandCreatureBrain.State.DEAD,"infected corpse remains after granting its drop")
+				actor.think(3.1,world.player)
+			check(not actor.active,"defeated creature returns to the pool")
 			seen[id]=true
 	director._spawn("fox",at,false)
 	director.trophy_rng.state=losing

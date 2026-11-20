@@ -1,6 +1,6 @@
 {
   "entries": [
-    {"id":"twigs","category":"camp","name":"折下第一根枯枝","desc":"用双手或工具收集 3 份木料。","metric":"wood","target":3,"parent":"","reward":"","hidden":false,"hint":""},
+    {"id":"twigs","category":"camp","name":"折下第一根枯枝","desc":"用双手或工具收集 3 份木料。","metric":"collected_wood","target":3,"parent":"","reward":"","hidden":false,"hint":""},
     {"id":"first_tools","category":"camp","name":"石器时代","desc":"亲手做出第一把石斧。","metric":"made_stone_axe","target":1,"parent":"twigs","reward":"","hidden":false,"hint":""},
     {"id":"nightfire","category":"camp","name":"火是自己生的","desc":"亲手做出一个营火。","metric":"made_campfire","target":1,"parent":"first_tools","reward":"","hidden":false,"hint":""},
     {"id":"safe_water","category":"camp","name":"今晚喝开水","desc":"在营火收取净水，或用手压净水泵净水。","metric":"got_safe_water","target":1,"parent":"nightfire","reward":"","hidden":false,"hint":""},

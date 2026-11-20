@@ -1,0 +1,97 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://game/actors/physics_character/debug/telemetry.gd" id="1"]
+
+[sub_resource type="StandardMaterial3D" id="Mat_com"]
+shading_mode = 0
+no_depth_test = true
+albedo_color = Color(0.28, 0.95, 0.78, 1)
+
+[sub_resource type="SphereMesh" id="Mesh_com"]
+material = SubResource("Mat_com")
+radius = 0.035
+height = 0.07
+radial_segments = 12
+rings = 5
+
+[sub_resource type="StandardMaterial3D" id="Mat_feet"]
+shading_mode = 0
+no_depth_test = true
+albedo_color = Color(1, 0.72, 0.34, 1)
+
+[sub_resource type="SphereMesh" id="Mesh_feet"]
+material = SubResource("Mat_feet")
+radius = 0.029
+height = 0.058
+radial_segments = 12
+rings = 5
+
+[sub_resource type="StyleBoxFlat" id="Panel"]
+content_margin_left = 15.0
+content_margin_top = 12.0
+content_margin_right = 15.0
+content_margin_bottom = 12.0
+bg_color = Color(0.045, 0.079, 0.10, 0.94)
+border_width_left = 3
+border_color = Color(0.28, 0.95, 0.78, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="SystemFont" id="SystemFont"]
+font_names = PackedStringArray("Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "PingFang SC")
+
+[sub_resource type="Theme" id="FontTheme"]
+default_font = SubResource("SystemFont")
+default_font_size = 15
+
+[node name="Telemetry" type="Node3D"]
+script = ExtResource("1")
+
+[node name="CenterOfMass" type="MeshInstance3D" parent="."]
+visible = false
+cast_shadow = 0
+mesh = SubResource("Mesh_com")
+
+[node name="FootPoint" type="MeshInstance3D" parent="."]
+visible = false
+cast_shadow = 0
+mesh = SubResource("Mesh_feet")
+
+[node name="Overlay" type="CanvasLayer" parent="."]
+
+[node name="Panel" type="PanelContainer" parent="Overlay"]
+offset_left = 18.0
+offset_top = 18.0
+mouse_filter = 2
+theme = SubResource("FontTheme")
+theme_override_styles/panel = SubResource("Panel")
+
+[node name="Readout" type="VBoxContainer" parent="Overlay/Panel"]
+theme_override_constants/separation = 5
+
+[node name="Title" type="Label" parent="Overlay/Panel/Readout"]
+theme_override_font_sizes/font_size = 20
+text = "物理人体测试台"
+
+[node name="Timing" type="Label" parent="Overlay/Panel/Readout"]
+unique_name_in_owner = true
+theme_override_colors/font_color = Color(0.63, 0.79, 0.84, 1)
+text = "等待物理采样"
+
+[node name="Contact" type="Label" parent="Overlay/Panel/Readout"]
+unique_name_in_owner = true
+text = "支撑脚"
+
+[node name="Measurements" type="Label" parent="Overlay/Panel/Readout"]
+unique_name_in_owner = true
+theme_override_constants/line_spacing = 3
+
+[node name="Legend" type="Label" parent="Overlay/Panel/Readout"]
+theme_override_colors/font_color = Color(0.7, 0.79, 0.8, 1)
+text = "青点为重心，橙点为双脚底中点"
+
+[node name="Keys" type="Label" parent="Overlay/Panel/Readout"]
+theme_override_colors/font_color = Color(0.89, 0.84, 0.66, 1)
+text = "空格  推动试块     R  重置场景"

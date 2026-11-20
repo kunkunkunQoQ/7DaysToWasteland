@@ -31,16 +31,12 @@ func run() -> void:
 			seen[cursor]=true
 			cursor=ids[cursor].parent
 	check(valid and ids.size()==61 and targets.size()==13,"61 distinct acyclic achievements, 13 unique existing secret rewards")
-	var prior:=session.bag.count("wood")
-	var twig:StaticBody3D
-	for chunk:WastelandChunk in session.stream.active.values():
-		for body in chunk.decoration_root.get_children():
-			if body.get_meta("resource","") in ["pine","oak"]:
-				twig=body
-				break
-		if twig: break
-	if twig: session._harvest(twig,9,0,twig.global_position)
-	check(session.bag.count("wood")==prior+3 and session.progress.records.get("wood",0)>=6,"real empty-hand harvesting advances wood record")
+	await close_world()
+	open_world({})
+	session.options.storage_path=WastelandSave.root_override+"/bindings.cfg"
+	session.options.reset_bindings()
+	book=session.achievements
+	await verify_barehand_wood()
 	var recipe:Dictionary=session.catalog.recipes.stone_axe
 	for id:String in recipe.inputs: session.bag.add(id,recipe.inputs[id])
 	session.ui_command("craft",["stone_axe",1,null])
@@ -104,10 +100,16 @@ func run() -> void:
 	await physics_frame
 	session.player.camera.global_position=block.global_position+Vector3(0,0,1.3)
 	session.player.camera.look_at(block.global_position)
-	for i in 8:
+	for i in 7:
 		session.player.stamina=session.player.max_stamina()
 		session._melee({},1)
+	book.refresh()
+	check(book.amount("inspect")==7 and not book.unlocked("inspect") and session.construction.blocks.has(c),"seven bare-handed knocks on one frame leave the eighth outstanding")
+	session._melee({},1)
 	reward("inspect")
+	hold("wood")
+	session._melee({},1)
+	check(session.progress.records.get("inspect_frame")==8,"a strike while holding material adds no inspection progress")
 	var fireplace:=place_nearby("campfire",coast)
 	hold("potato")
 	if session.construction.blocks.has(fireplace):
@@ -200,6 +202,61 @@ func run() -> void:
 	await close_world()
 	print("ACHIEVEMENTS QA passed=%d failed=%d"%[passed,failures])
 	quit(1 if failures else 0)
+
+func verify_barehand_wood()->void:
+	await physics_frame
+	var tree:StaticBody3D
+	for chunk:WastelandChunk in session.stream.active.values():
+		if not chunk.standing_trees.is_empty():
+			tree=chunk.standing_trees.values()[0]
+			break
+	if not is_instance_valid(tree):
+		check(false,"standing tree available for bare-hand harvest")
+		return
+	var id:String=tree.get_meta("key")
+	var kind:String=tree.get_meta("resource")
+	var camera:=session.player.camera
+	var original:=camera.transform
+	camera.global_position=tree.global_position+Vector3.BACK*1.9
+	camera.look_at(tree.global_position)
+	for i in 12:
+		if tree.collision_layer==0: break
+		session.player.stamina=session.player.max_stamina()
+		session._melee({},1.0)
+	camera.transform=original
+	check(session.timber.active.has(id) and session.player.injury.last_source=="bark","bare-handed swings fell a live tree and scrape the player's hands")
+	for i in 480:
+		if session.timber.active.is_empty(): break
+		session.timber.tick(1.0/60.0)
+	var logs:Array[String]=[]
+	var yield_count:=0
+	for key:String in session.fx.drop_records:
+		var row:Dictionary=session.fx.drop_records[key]
+		if row.has("log_section"):
+			logs.append(key)
+			yield_count+=int(row.items.wood)
+	var book=session.achievements
+	book.refresh()
+	check(yield_count==int(WastelandSession.RESOURCES[kind][2].wood) and session.bag.count("wood")==0 and book.amount("twigs")==0,"settled wood keeps the tree's full yield on the ground and has no pickup credit yet")
+	if logs.is_empty(): return
+	var bag:=session.bag
+	var filler:=bag.add("sledge",bag.capacity()-1)
+	bag.add("wood",bag.stack_size("wood")-2)
+	var log_id:=logs[0]
+	var first_stack:=int(session.fx.drop_records[log_id].items.wood)
+	var moved:=session.fx.take_drop(log_id)
+	book.refresh()
+	check(moved==2 and session.fx.drop_records[log_id].items.wood==first_stack-2 and book.amount("twigs")==2 and not book.unlocked("twigs"),"a partially collected log credits only the two pieces that fit")
+	check(session.fx.take_drop(log_id)==0 and book.amount("twigs")==2,"repeated pickup with a full bag adds no wood progress")
+	bag.spend({"sledge":filler})
+	for key in logs: session.fx.take_drop(key)
+	book.refresh()
+	check(book.unlocked("twigs") and session.progress.records.collected_wood==yield_count,"collecting the remaining wood unlocks the achievement and counts every piece once")
+	var old_serial:=session.fx.serial
+	session.discard("wood")
+	if session.fx.serial>old_serial: session.fx.take_drop(str(session.fx.serial))
+	check(session.fx.serial==old_serial+1 and session.progress.records.collected_wood==yield_count,"discarding and retrieving the same wood gives no extra credit")
+	bag.spend({"wood":bag.count("wood")})
 
 func hold(id:String)->void:
 	if id!="" and session.bag.count(id)==0: session.bag.add(id,1)

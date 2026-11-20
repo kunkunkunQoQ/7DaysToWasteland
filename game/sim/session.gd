@@ -6,7 +6,16 @@ signal panel(id: String, context: Variant)
 signal failed
 signal stored(slot: int)
 
+const WORLD_SAVE_INTERVAL_MS := 30000
+const QUICK_SAVE_DELAY_MS := 5000
 const BOAT_REPAIR := {"wood":6, "fiber":3, "scrap":2}
+const TRADE_COST := {"scrap":8}
+const TRADE_REWARD := {"clean_water":2,"canned":2,"bandage":1}
+const LANDING_CARGO := {
+	"shore_float":{"clean_water":2,"canned":1,"tape":2},
+	"survey_float":{"parts":5,"electronics":2,"fuel":3}
+}
+const VEHICLE_SALVAGE := {"scrap":4,"parts":1}
 const Chest := preload("res://game/art/supply_chest.gd")
 const SaplingPlanting := preload("res://game/sim/sapling_planting.gd")
 var timber := preload("res://game/sim/timber.gd").new()
@@ -101,7 +110,8 @@ var reload_left := 0.0
 var reload_span := 0.0
 var heavy_charge := 0.0
 var heavy_pending := false
-var next_save := 92.0
+var world_save_at_ms := 0
+var last_autosave_error := OK
 var light_tick := 0.0
 var vehicle_sync := 0.0
 var trade_day := 0
@@ -142,6 +152,20 @@ func guest_positions()->Array[Vector3]:
 		for person:WastelandSurvivor in network.living_guests(): result.append(person.global_position)
 	return result
 
+func create_bag(saved: Dictionary) -> WastelandBag:
+	var inventory := WastelandBag.new(catalog, saved)
+	inventory.acquired.connect(achievements.acquired_item)
+	if slot > 0:
+		inventory.changed.connect(_schedule_world_save)
+	return inventory
+
+func _schedule_world_save(delay_ms: int = QUICK_SAVE_DELAY_MS) -> void:
+	if slot <= 0 or replica or preview_only: return
+	var deadline := Time.get_ticks_msec() + delay_ms
+	# A time-sensitive change can bring the world's single checkpoint forward.
+	if world_save_at_ms == 0 or deadline < world_save_at_ms:
+		world_save_at_ms = deadline
+
 func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data: WastelandCatalog, opts: WastelandSettings, preview: bool = false) -> void:
 	options = opts
 	catalog = data
@@ -176,14 +200,13 @@ func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data:
 		add_child(preview_camera)
 		preview_camera.make_current()
 		return
-	bag = WastelandBag.new(catalog, snapshot.get("bag", {}))
 	progress = WastelandProgression.new(snapshot.get("progress", {}))
 	var old_threat:Dictionary=snapshot.get("threat",{})
 	if not snapshot.get("progress",{}).has("quest_revision") and int(old_threat.get("died",0))>0 and int(old_threat.get("cleared",0))>0 and old_threat.cleared==old_threat.get("event",0):
 		progress.records.failed_horde_day=int(old_threat.cleared)
 		progress.repair_base=int(progress.records.get("build",0))
 	achievements.configure(self)
-	bag.acquired.connect(achievements.acquired_item)
+	bag = create_bag(snapshot.get("bag", {}))
 	if progress.job >= catalog.quests.size() and progress.finish_day == 0:
 		progress.finish_day = -1 # Historical saves recorded completion, but did not store its date.
 	if snapshot.is_empty():
@@ -200,7 +223,6 @@ func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data:
 	guest_states = snapshot.get("guests", {}).duplicate(true)
 	shape = int(snapshot.get("shape", 0))
 	turn = int(snapshot.get("turn", 0))
-	next_save = clock.elapsed + 92.0
 	audio = WastelandAudio.new()
 	fx = WastelandEffects.new()
 	construction = WastelandConstruction.new()
@@ -327,13 +349,13 @@ func _stock_landing() -> void:
 	if mooring.is_finite():
 		vehicle_records["landing_boat"] = {"type":"boat", "point":mooring + Vector3.UP * 0.10, "yaw":0.0, "fuel":23.0, "needs_repair":true}
 	var supplies := [
-		{"at":Vector2(9, tip_z - 22), "id":"shore_float", "items":{"clean_water":2, "canned":1, "tape":2}},
-		{"at":Vector2(23, -42), "id":"survey_float", "items":{"parts":5, "electronics":2, "fuel":3}},
+		{"at":Vector2(9, tip_z - 22), "id":"shore_float", "items":LANDING_CARGO.shore_float.duplicate()},
+		{"at":Vector2(23, -42), "id":"survey_float", "items":LANDING_CARGO.survey_float.duplicate()},
 	]
 	for supply in supplies:
 		var point := _lake_point(supply.at)
 		if point.is_finite():
-			fx.drop_records[supply.id] = {"items":supply.items, "point":point + Vector3.UP * 0.25, "buoy":true}
+			fx.store_drop(supply.id,{"items":supply.items, "point":point + Vector3.UP * 0.25, "buoy":true})
 	fx._resync_drops()
 
 func _lake_point(start: Vector2) -> Vector3:
@@ -361,8 +383,19 @@ func _physics_process(delta: float) -> void:
 		grove.tick(delta)
 		timber.tick(delta)
 		return
-	if simulation_paused or death_screen or player == null:
+	if player == null:
 		return
+	# Between simulation steps every transfer is complete and the host is selected.
+	# A pending checkpoint also finishes if the world has since been paused.
+	if world_save_at_ms > 0 and Time.get_ticks_msec() >= world_save_at_ms:
+		var error := save_now(false)
+		if error != OK and error != last_autosave_error:
+			notify("自动保存失败，将重试 · 错误 %d" % error)
+		last_autosave_error = error
+	if simulation_paused or death_screen:
+		return
+	if world_save_at_ms == 0:
+		_schedule_world_save(WORLD_SAVE_INTERVAL_MS)
 	clock.advance(delta)
 	stream.advance_loot_day(clock.day())
 	action_lock = maxf(0, action_lock - delta)
@@ -402,9 +435,6 @@ func _physics_process(delta: float) -> void:
 		construction.place_preview.hide()
 	if is_instance_valid(network):
 		network.host_tick(self,delta)
-	if clock.elapsed >= next_save:
-		next_save = clock.elapsed + 92.0
-		save_now(false)
 
 func mouse_look(screen_delta: Vector2) -> void:
 	if not controls_enabled or simulation_paused or death_screen or player == null:
@@ -781,7 +811,7 @@ func _update_prompt(held: String) -> void:
 		var fuel: float = player.mount_vehicle.record.fuel
 		var target: Object = interaction.get("collider")
 		if is_instance_valid(target) and target.get_meta("kind", "") == "buoy":
-			hint = "[%s] 打捞浮标物资" % use
+			hint = fx.pickup_hint(target.get_meta("drop_id"), use)
 		else:
 			var leave := "离船" if player.mount_vehicle.record.type == "boat" else "下车"
 			hint = "[%s] %s  ·  %s" % [use, leave, "脚踏驱动" if player.mount_vehicle.record.type == "bicycle" else "燃料 %.0f" % fuel]
@@ -819,14 +849,10 @@ func _update_prompt(held: String) -> void:
 				hint = "[%s] 阅读撤离记录" % use
 			"trader":
 				hint = "[%s] 查看%s公告板" % [use,_station_name(object.get_meta("cell"))]
-			"drop":
-				var contents:Dictionary=fx.drop_records.get(str(object.get_meta("drop_id","")),{}).get("items",{})
-				var title:=catalog.requirements(contents) if contents.size()==1 else "物资包"
-				hint = title+" · "+("靠近拾取" if contents.keys().any(func(id):return bag.room_for(id)>0) else "背包已满")
+			"drop", "buoy":
+				hint = fx.pickup_hint(object.get_meta("drop_id"), use)
 			"stump":
 				hint = "[%s] 清除树桩" % fire if held in timber.AXES else "树桩 · 斧头或铲子可清除"
-			"buoy":
-				hint = "[%s] 打捞浮标物资" % use
 			"vehicle":
 				hint = "[%s] 检查待修摩托艇" % use if object.record.get("needs_repair", false) else "[%s] 驾驶  ·  [%s] 维护选项" % [use, alt]
 				if object.record.has("hp"): focus_damage=float(object.record.hp)/object.max_hp()
@@ -1183,9 +1209,11 @@ func _melee(item: Dictionary, power: float) -> void:
 			"resource":
 				_harvest(body, amount, int(item.get("power", 0)), hit.position)
 			"block", "poi_wall", "loot", "trader", "note", "crop", "buoy":
-				if body.get_meta("kind")=="block" and _uses_fists(bag.current()):
+				if body.get_meta("kind")=="block" and bag.current().is_empty() and bag.offhand.is_empty():
 					var piece: Dictionary=construction.blocks.get(body.get_meta("block"),{})
-					if piece.get("tier",-1)==0 and piece.get("device","")=="": achievements.add("inspect_frame")
+					if piece.get("tier",-1)==0 and piece.get("device","")=="":
+						achievements.add("inspect_frame")
+						if power<=1.0: amount=minf(amount,5.0)
 				var sound:="chop"
 				if body.has_meta("timber_wall"):
 					var timber:bool=body.get_meta("timber_wall")
@@ -1371,8 +1399,7 @@ func hit_wall(body: StaticBody3D, amount: float, contact:=Vector3.INF, normal:=V
 		if fx.drop_records.has(id):
 			var contents: Dictionary = fx.drop_records[id].items
 			var buoy_at := body.global_position
-			fx._release_drop(id)
-			fx.drop_records.erase(id)
+			fx.erase_drop(id)
 			fx.collapse(buoy_at,Color("#db9d62"))
 			drop_materials(buoy_at,contents,normal)
 	elif type == "poi_wall":
@@ -1433,7 +1460,7 @@ func _tick_reload(delta: float) -> void:
 	var current := int(bag.magazine.get(reload_id,0))
 	var moved := mini(int(item.mag) - current, bag.count(item.ammo))
 	if bag.spend({item.ammo:moved}):
-		bag.magazine[reload_id] = current + moved
+		bag.set_loaded_rounds(reload_id, current + moved)
 	reload_id = ""
 
 func _shoot(id: String, item: Dictionary) -> void:
@@ -1444,7 +1471,7 @@ func _shoot(id: String, item: Dictionary) -> void:
 		start_reload(id)
 		action_lock = 0.40
 		return
-	bag.magazine[id] = loaded - 1
+	bag.set_loaded_rounds(id, loaded - 1)
 	action_lock = float(item.cooldown)
 	var origin := player.camera.global_position
 	var bow: bool = item.ammo == "arrow"
@@ -1541,6 +1568,8 @@ func queue_craft(id: String, count: int, cell: Variant) -> void:
 		if Fire.thermal(record): payment.left=duration
 		queue.append(payment)
 		queued += 1
+	if cell == null and queued > 0:
+		_schedule_world_save()
 	notify("已加入队列 · %s ×%d" % [catalog.title(id), queued] if queued > 0 else "材料不足或队列已满")
 
 func _label_jobs(queue:Array)->void:
@@ -1558,6 +1587,8 @@ func cancel_queue(cell: Variant,ticket:int=-1) -> void:
 	var job:Dictionary=queue[index]
 	var released:=minf(float(job.get("span",0.0)),maxf(0.0,float(job.done)-clock.elapsed))
 	queue.remove_at(index)
+	if cell == null:
+		_schedule_world_save()
 	for i in range(index,queue.size()): queue[i].done-=released
 	if cell!=null and not job.get("molten",{}).is_empty():
 		var stock:Dictionary=construction.blocks[cell].molten
@@ -1587,6 +1618,7 @@ func collect_station(cell: Vector3i) -> void:
 func _finish_crafting() -> void:
 	while not hand_queue.is_empty() and float(hand_queue[0].done) <= clock.elapsed:
 		var job: Dictionary = hand_queue.pop_front()
+		_schedule_world_save()
 		award({job.id:int(job.amount)}, player.global_position)
 		achievements.add("made_"+str(job.id),int(job.amount))
 		gain(11, "craft")
@@ -1828,10 +1860,10 @@ func collect_dispatch(cell:Vector2i) -> void:
 		return
 	var depot:=Vector2(cell*32)+OutpostOrders.DEPOT
 	if Vector2(player.position.x,player.position.z).distance_to(depot)>5.5: return
-	if record.signed and bag.count("dispatch_parcel")>0:
+	if record.signed:
 		notify("货包已签收，请带回原驻地")
 		return
-	if bag.add("dispatch_parcel",1)==0:
+	if bag.count("dispatch_parcel")==0 and bag.add("dispatch_parcel",1)==0:
 		notify("背包已满")
 		return
 	record.signed=true
@@ -1840,7 +1872,7 @@ func collect_dispatch(cell:Vector2i) -> void:
 
 func _dispatch_waiting(cell: Vector2i) -> bool:
 	var order := progress.dispatch
-	return order.get("day",0)==clock.day() and progress.delivery_day!=clock.day() and order.get("relay")==cell and bag.count("dispatch_parcel")==0
+	return order.get("day",0)==clock.day() and progress.delivery_day!=clock.day() and order.get("relay")==cell and not order.get("signed",false)
 
 func deliver_order(id: String) -> void:
 	if replica or not _at_board(): return
@@ -1869,11 +1901,11 @@ func trader_exchange() -> void:
 	if trade_day == clock.day():
 		notify("今日储备已换完")
 		return
-	if not bag.spend({"scrap": 8}):
-		notify("交换需要废铁 ×8")
+	if not bag.spend(TRADE_COST):
+		notify("交换需要" + catalog.requirements(TRADE_COST))
 		return
 	trade_day = clock.day()
-	award({"clean_water":2,"canned":2,"bandage":1}, player.global_position)
+	award(TRADE_REWARD, player.global_position)
 	notify("已换取驻地储备")
 
 func gain(amount: int, record: String = "", count: int = 1) -> void:
@@ -1894,13 +1926,6 @@ func discard(id: String, allow_confirmation := true) -> void:
 	if item.is_empty() or bag.count(id)<=0: return
 	if item.get("kind","")=="quest":
 		notify("任务物品已保护，不能丢弃")
-		return
-	if bag.available_count(id)==0:
-		notify("队友正持有这件物品")
-		return
-	if is_instance_valid(network) and network.server() and network.team_uses_last_mainhand(self,id):
-		player.set_meta("discard_item","")
-		notify("队友主手正在使用最后一件%s，请先让队友切换快捷格。"%catalog.title(id))
 		return
 	if discard_protected(id):
 		var now:=Time.get_ticks_msec()
@@ -1934,13 +1959,14 @@ func drop_materials(at:Vector3,items:Dictionary,normal:=Vector3.UP)->void:
 		if int(items[id])>0:
 			var angle:=TAU*index/items.size()
 			var spread:=(cos(angle)*tangent+sin(angle)*bitangent) if items.size()>1 else Vector3.ZERO
-			spawn_drop(at+outward*0.16+spread*0.03,{id:int(items[id])},outward*0.45+Vector3.UP*0.24+spread*0.62)
+			var loose: bool=catalog.items.get(id,{}).get("kind","")=="material" and id not in ["tree_leaf","stick"]
+			spawn_drop(at+outward*0.16+spread*0.03,{id:int(items[id])},outward*0.45+Vector3.UP*0.24+spread*0.62,false,loose)
 			index+=1
 
-func spawn_drop(at: Vector3, items: Dictionary, impulse:=Vector3.INF, discarded:=false) -> void:
+func spawn_drop(at: Vector3, items: Dictionary, impulse:=Vector3.INF, discarded:=false, loose_material:=false) -> void:
 	var point := at
 	point.y = maxf(point.y, stream.ground_at(at) + 0.19)
-	fx.add_items(point,items,impulse,discarded)
+	fx.add_items(point,items,impulse,discarded,{},"",loose_material)
 
 func _place_vehicle(type: String) -> void:
 	var hit := _trace(5.5, 3, true)
@@ -1986,7 +2012,7 @@ func _damage_vehicle(vehicle: WastelandVehicle,amount: float,contact:=Vector3.IN
 	vehicles.erase(vehicle.id)
 	vehicle.collision_layer=0
 	vehicle.hide()
-	drop_materials(contact if contact.is_finite() else vehicle.global_position,{"scrap":4,"parts":1},normal)
+	drop_materials(contact if contact.is_finite() else vehicle.global_position,VEHICLE_SALVAGE,normal)
 	vehicle.queue_free()
 
 func _sync_vehicles() -> void:
@@ -2119,11 +2145,11 @@ func respawn() -> void:
 	notify("已返回"+start_name()+" · 地图标记了遗落物资")
 
 func save_now(report: bool) -> Error:
-	if slot == 0 or preview_only or remote_actor or not is_instance_valid(player):
+	if slot <= 0 or preview_only or replica or remote_actor or not is_instance_valid(player):
 		return ERR_UNCONFIGURED
+	achievements.refresh()
 	if is_instance_valid(network):
 		network.store_guests(self)
-	achievements.refresh()
 	var snapshot := {
 		"guests":guest_states,
 		"falling_trees":timber.snapshot(),
@@ -2139,10 +2165,13 @@ func save_now(report: bool) -> Error:
 	}
 	var error := WastelandSave.write(slot, snapshot)
 	if error == OK:
+		world_save_at_ms = 0
+		last_autosave_error = OK
 		stored.emit(slot)
 		if report: notify("世界已保存")
-	elif report:
-		notify("保存失败 · 错误 %d" % error)
+	else:
+		world_save_at_ms = Time.get_ticks_msec() + QUICK_SAVE_DELAY_MS
+		if report: notify("保存失败 · 错误 %d" % error)
 	return error
 
 func notify(text: String, duration: float = 2.5) -> void:

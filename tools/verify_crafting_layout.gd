@@ -3,6 +3,7 @@ extends "res://tools/verify_avatar_ui.gd"
 func icon_row(container:Container,id:String,words:String)->bool:
 	for row in container.get_children():
 		if row.get_meta("item","")!=id: continue
+		if row is Button: return row.icon==WastelandItemArt.icon(id,app.session.catalog.items[id]) and row.text.contains(words)
 		var image:TextureRect=row.get_child(0)
 		return image.texture==WastelandItemArt.icon(id,app.session.catalog.items[id]) and (row.get_child(1) as Label).text.contains(words)
 	return false
@@ -36,6 +37,11 @@ func run()->void:
 	await click(p.favorite_button)
 	await click(button(p.content,"已收藏"))
 	check(p.selection=="bandage" and p.recipe_list.get_child_count()==1,"favorites preserve the searched recipe")
+	await click(p.craft_materials.get_child(0))
+	check(p.active=="sources" and p.current_context.item=="cloth","missing ingredient opens that item's sources")
+	await click(button(p.content,"返回配方"))
+	search=p.content.find_child("RecipeSearch",true,false)
+	check(p.active=="craft" and p.selection=="bandage" and p.recipe_view=="已收藏" and search.text=="绷带","return restores selected hand recipe, favorites and query")
 	s.bag.add("cloth",11)
 	await create_timer(0.35).timeout
 	await click(p.craft_max)
@@ -82,6 +88,10 @@ func run()->void:
 	var recipe:Dictionary=s.catalog.recipes[p.selection]
 	check(p.selection=="melt_snow" and p.recipe_list.get_child(0).icon==WastelandItemArt.icon("clean_water",s.catalog.items.clean_water),"filtered alias recipe shows water output icon")
 	check(icon_row(p.craft_materials,"packed_snow","缺 2") and p.fire_button.disabled,"recipe ingredients and empty independent fuel slot are visible")
+	await click(p.craft_materials.get_child(0))
+	check(p.active=="sources" and p.current_context.item=="packed_snow","station ingredient opens the snow article")
+	app._handle_back()
+	check(p.active=="craft" and p.current_context==cell and p.selection=="melt_snow" and p.recipe_query=="融雪","system back restores campfire and alias recipe")
 	for id:String in recipe.inputs: s.bag.add(id,recipe.inputs[id])
 	await create_timer(0.3).timeout
 	await click(p.craft_submit)

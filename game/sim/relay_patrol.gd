@@ -4,6 +4,8 @@ const Depots := preload("res://game/sim/outpost_orders.gd")
 const TASKS := ["audit", "listen", "repair"]
 const TITLES := {"audit":"物资盘点", "listen":"无线电守听", "repair":"线路抢修"}
 const CRATES := {"workshop":"工坊物资", "watch":"守夜物资", "travel":"远行物资"}
+const BONUS_INTERVAL := 3
+const BONUS_SUPPLIES := {"spring":4}
 const LISTEN_SECONDS := 18
 
 static func completed(s: Node) -> int:
@@ -112,7 +114,9 @@ static func tick(s: Node) -> void:
 		advance(s)
 
 static func reward(run: Dictionary, crate: String) -> Dictionary:
-	var count: int = run.stops.size()
+	return crate_supplies(run.stops.size(),int(run.serial),crate)
+
+static func crate_supplies(count: int, serial: int, crate: String) -> Dictionary:
 	var items: Dictionary
 	match crate:
 		"workshop": items = {"steel":count+1, "electronics":count, "parts":count*2}
@@ -120,7 +124,7 @@ static func reward(run: Dictionary, crate: String) -> Dictionary:
 			items = {"bandage":count, "reinforcement_kit":1}
 			items["round" if count==2 else "heavy_round"] = count*4
 		"travel": items = {"trail_ration":count, "clean_water":count*2, "medkit":1}
-	if int(run.serial)%3 == 0: items["spring"] = 4
+	if serial%BONUS_INTERVAL == 0: items.merge(BONUS_SUPPLIES)
 	return items
 
 static func claim(s: Node, serial: int, crate: String) -> void:

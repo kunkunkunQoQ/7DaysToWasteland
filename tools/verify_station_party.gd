@@ -63,9 +63,10 @@ func host() -> void:
 	var forge:=arrange(s,"forge")
 	var fire:=arrange(s,"campfire")
 	if not check(forge!=Vector3i.MAX and fire!=Vector3i.MAX,"host places two physical stations"): return
-	for id: String in ["coal","wood","scrap","dirty_water"]:
-		s.bag.add(id,8 if id=="scrap" else 2 if id=="dirty_water" else 1)
 	if not check(app.network.listen(port)==OK and await until(func():return not app.network.joined_members().is_empty()),"ENet guest joins"): return
+	var member:WastelandLan.MemberState=app.network.joined_members()[0]
+	for id: String in ["coal","wood","scrap","dirty_water"]:
+		member.bag.add(id,8 if id=="scrap" else 2 if id=="dirty_water" else 1)
 	var host_near:=WastelandConstruction.position_of(forge)+Vector3.BACK*2.3
 	host_near.y=s.stream.ground_at(host_near)+0.08
 	s.player.global_position=host_near
@@ -74,19 +75,19 @@ func host() -> void:
 	app.network.joined_members()[0].survivor.global_position=away
 	flag("far")
 	if not check(await until(func():return s.marker_records.size()==1),"guest's ordinary marker acknowledges ordered requests"): return
-	check(record(forge).fuel==0.0 and not record(forge).has("smelt_input") and not record(forge).enabled and record(fire).queue.is_empty() and s.bag.count("coal")==1 and s.bag.count("scrap")==8,"out-of-reach requests leave both stations and bag intact")
+	check(record(forge).fuel==0.0 and not record(forge).has("smelt_input") and not record(forge).enabled and record(fire).queue.is_empty() and member.bag.count("coal")==1 and member.bag.count("scrap")==8,"out-of-reach requests leave both stations and the guest bag intact")
 	s.player.global_position=away
 	if not check(position_guest(forge),"guest stands within reach of forge"): return
 	flag("forge")
 	if not check(await acknowledged("forged"),"guest completed forge interactions"):return
-	check(not record(forge).enabled and record(forge).queue.size()==1 and record(forge).molten.scrap==0 and s.bag.count("scrap")==0,"host sees paused paid forge job")
+	check(not record(forge).enabled and record(forge).queue.size()==1 and record(forge).molten.scrap==0 and member.bag.count("scrap")==0,"host sees forge job paid from guest supplies")
 	if not check(position_guest(fire),"guest stands within reach of campfire"):return
 	flag("stove")
 	if not check(await acknowledged("cooked"),"guest collected boiled water"):return
-	check(record(fire).queue.is_empty() and record(fire).out.is_empty() and s.bag.count("clean_water")==1 and s.bag.count("dirty_water")==1,"host sees output and exactly one refund")
+	check(record(fire).queue.is_empty() and record(fire).out.is_empty() and member.bag.count("clean_water")==1 and member.bag.count("dirty_water")==1 and s.bag.count("clean_water")==0,"output and one refund reach the guest")
 	check(s.save_now(false)==OK,"host saves shared stations")
 	var saved:=WastelandSave.read(1)
-	check(saved.construction.blocks[forge]==record(forge) and saved.construction.blocks[fire]==record(fire) and saved.bag.counts==s.bag.counts,"disk contains the authoritative fuel, jobs, molten stock and inventory")
+	check(saved.construction.blocks[forge]==record(forge) and saved.construction.blocks[fire]==record(fire) and saved.bag.counts==s.bag.counts and saved.guests[member.token].bag.counts==member.bag.counts,"disk contains the authoritative stations and distinct host and guest inventories")
 	flag("saved")
 	await acknowledged("finished")
 

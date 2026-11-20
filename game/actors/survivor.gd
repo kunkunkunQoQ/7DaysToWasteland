@@ -61,7 +61,7 @@ var challenge_interval := 0.0
 var challenge_position := Vector3.INF
 var challenge_streaks := {}
 
-func configure(owner_session: Node3D, save: Dictionary, initial: Vector3, local_camera: bool = true, remote_profile: String = "ranger") -> void:
+func configure(owner_session: Node3D, save: Dictionary, initial: Vector3, local_camera: bool = true, remote_profile: String = "ranger", initial_bag: WastelandBag = null) -> void:
 	session = owner_session
 	var chosen: String = owner_session.options.appearance if local_camera else remote_profile
 	profile = chosen if Profiles.STATS.has(chosen) else "ranger"
@@ -107,7 +107,8 @@ func configure(owner_session: Node3D, save: Dictionary, initial: Vector3, local_
 	fracture = float(save.get("fracture", 0.0))
 	sprain = float(save.get("sprain", 0.0))
 	wet = clampf(float(save.get("wet", 0.0)), 0.0, 1.0)
-	flashlight = bool(save.get("lamp", false)) and session.bag.available_count("torch") > 0
+	var inventory: WastelandBag = initial_bag if initial_bag != null else session.bag
+	flashlight = bool(save.get("lamp", false)) and inventory.count("torch") > 0
 	torch_in_hand = bool(save.get("torch_in_hand", false))
 	eyes.rotation.x = pitch
 	injury.reset(health)

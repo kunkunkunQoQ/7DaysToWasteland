@@ -1,0 +1,11 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="PackedScene" path="res://game/actors/physics_character/tests/physics_character_test.tscn" id="1_test"]
+[ext_resource type="Resource" path="res://game/actors/physics_character/config/rounded_feet120.tres" id="2_config"]
+[ext_resource type="Script" path="res://game/actors/physics_character/stability/arena_120.gd" id="3_arena"]
+
+[node name="RoundedFeet120Test" instance=ExtResource("1_test")]
+script = ExtResource("3_arena")
+
+[node name="Character" parent="." index="3"]
+config = ExtResource("2_config")

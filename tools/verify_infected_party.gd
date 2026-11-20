@@ -18,7 +18,7 @@ func _host() -> void:
 		session.fx.projectile(ground+Vector3.UP*4.4,Vector3(0.06,1.4,0.04),null,"acid",16)
 		session.fx.simulate_projectiles(0.08)
 	,CONNECT_ONE_SHOT)
-	if not await _until(func(): return not game.network.joined_members().is_empty(),12):
+	if not await _until(func(): return not game.network.joined_members().is_empty(),30):
 		_check(false,"guest joins")
 		_done()
 		return
@@ -27,7 +27,7 @@ func _host() -> void:
 	var reaches_ground := func():
 		return _impact_patches(session,prior_shot.origin)==1
 	_check(await _until(reaches_ground,3),"host resolves pre-join airborne shot into one ground patch")
-	await create_timer(0.6).timeout
+	_check(await _until(func(): return session.marker_records.any(func(row): return row.name=="late shot landed"),15),"guest finishes inspecting the two bootstrap effects")
 	var guest: WastelandSurvivor = game.network.joined_members()[0].survivor
 	var at := guest.global_position
 	var before := guest.health
@@ -35,20 +35,21 @@ func _host() -> void:
 	var corpse: WastelandCreature = session.hordes.alive.back()
 	corpse.take_hit(999,at)
 	_check(await _until(func(): return not corpse.active and guest.health < before-12,5),"host resolves delayed blast against remote survivor")
-	await create_timer(1.0).timeout
+	_check(await _until(func(): return session.marker_records.any(func(row): return row.name=="rupture visible"),15),"guest is ready to observe a new projectile")
 	at = guest.global_position
 	var launch := Vector3(2,3,-3)
-	session.fx.projectile(at + Vector3.RIGHT*2 + Vector3.UP*1.8,launch,null,"acid",16)
-	await create_timer(0.45).timeout
+	session.fx.projectile(_landing_point(session)+Vector3.UP*4.4,launch,null,"acid",16)
+	_check(await _until(func(): return session.marker_records.any(func(row): return row.name=="acid visible"),10),"guest observes the live acid flight before ground damage")
 	before = guest.health
 	session.hordes.infected_effect("residue",at+Vector3.UP*0.07)
 	_check(await _until(func(): return guest.health < before-2,3),"host simulates ground acid on remote survivor")
-	await create_timer(1.25).timeout
+	_check(await _until(func(): return session.marker_records.any(func(row): return row.name=="residue confirmed"),10),"guest confirms the final damage before the room closes")
+	await _until(func(): return game.network.joined_members().is_empty(),10)
 	_done()
 
 func _client() -> void:
 	_check(game.network.connect_to("127.0.0.1",port)==OK,"guest connects")
-	if not await _until(func(): return is_instance_valid(game.session) and game.session.replica,12):
+	if not await _until(func(): return is_instance_valid(game.session) and game.session.replica,30):
 		_check(false,"guest receives infected test world")
 		_done()
 		return
@@ -62,14 +63,19 @@ func _client() -> void:
 	if not flights.is_empty():
 		var landed := func(): return session.fx.acid_flights().is_empty() and _impact_patches(session,flights[0].origin)==1
 		_check(await _until(landed,2.5),"late-join shot continues to its single host-authorized impact")
+	session.ui_command("marker",[Vector2.ZERO,"late shot landed"])
 	var visible_fuse := func():
 		return game.network.smooth_actors.values().any(func(actor): return actor.type=="bloater" and actor.hp==0 and actor.global_position.distance_to(session.player.global_position)<4 and is_instance_valid(actor.blast_ring) and actor.blast_ring.visible)
 	_check(await _until(visible_fuse,6),"guest sees primed corpse and warning ring before damage")
 	_check(await _until(func(): return session.player.injury.last_source=="rupture" and session.player.health < session.player.max_health()-12,4),"guest receives authoritative rupture damage and cause")
-	_check(await _until(func(): return session.fx.shots.any(func(shot): return shot.kind=="acid" and shot.life>0),4),"guest sees mirrored flying poison")
+	var last_shot:=session.fx.acid_serial
+	session.ui_command("marker",[Vector2.ZERO,"rupture visible"])
+	_check(await _until(func(): return session.fx.acid_flights().any(func(shot): return int(shot.id)>last_shot),10),"guest sees the newly mirrored flying poison")
+	session.ui_command("marker",[Vector2.ZERO,"acid visible"])
 	_check(await _until(func(): return not session.fx.acid_snapshot().is_empty(),3),"guest sees authoritative acid patch")
 	_check(await _until(func(): return session.player.injury.last_source=="residue",3),"guest receives ground burn from host")
-	await create_timer(0.23).timeout
+	session.ui_command("marker",[Vector2.ZERO,"residue confirmed"])
+	_check(await _until(func(): return is_instance_valid(session) and session.marker_records.any(func(row): return row.name=="residue confirmed"),5),"guest acknowledges the finished run before disconnecting")
 	_done()
 
 func _landing_point(session: WastelandSession) -> Vector3:

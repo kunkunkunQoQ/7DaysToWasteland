@@ -248,6 +248,9 @@ func offline() -> void:
 func guest_collectible() -> int:
 	var at := wall_point(s.stream.active[SHORE],MP_KEY)
 	var count := s.bag.count("wood")
+	if is_instance_valid(s.network) and s.network.server():
+		for member: WastelandLan.MemberState in s.network.joined_members():
+			count += member.bag.count("wood")
 	for row: Dictionary in s.fx.drop_records.values():
 		if Vector3(row.point).distance_to(at)<12.0:
 			count += int(row.items.get("wood",0))
@@ -294,14 +297,15 @@ func host() -> void:
 	s.hordes.next_patrol=INF
 	s.hordes.next_herd=INF
 	s.player.global_position=wall+outside(MP_KEY)*6.0+Vector3.UP*0.3
-	s.bag.add("sledge",1)
-	s.bag.assign("sledge",3)
 	var sources := estimate(c)
 	var serial := s.fx.serial
 	var start := guest_collectible()
 	if not check(app.network.listen(port)==OK,"host opens ENet"): return
 	if not check(await until(func():return not app.network.joined_members().is_empty()),"independent guest joins"): return
-	app.network.joined_members()[0].slot=3
+	var guest: WastelandLan.MemberState = app.network.joined_members()[0]
+	guest.bag.add("sledge",1)
+	guest.bag.assign("sledge",3)
+	guest.bag.active=3
 	app.network.joined_members()[0].survivor.global_position=wall+outside(MP_KEY)*2.8+Vector3.UP*0.20
 	if not check(await until(func():return confirmed("wall-ready")),"guest aims at intact wall"): return
 	if not await compare_remote_finish(c,1): return

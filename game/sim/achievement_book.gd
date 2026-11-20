@@ -1,6 +1,7 @@
 extends RefCounted
 
 const LAND := ["meadow","taiga","alpine","desert","mesa","marsh","canyon"]
+const CAT_OUTFIT := ["meme_ears","meme_whiskers","meme_tail","meme_claws"]
 static var ANIMALS: Array = WastelandHordes.WILDLIFE + ["heron","lake_fish","pond_turtle","crayfish"]
 var entries: Array = []
 var by_id := {}
@@ -71,8 +72,14 @@ func refresh() -> void:
 	if session==null or session.replica or not is_instance_valid(session.player): return
 	var bag: WastelandBag=session.bag
 	var earned: Array[String]=[]
-	var cat:=["meme_ears","meme_whiskers","meme_tail","meme_claws"]
-	if cat.all(func(id):return bag.is_worn(id)): mark("full_cat")
+	if not session.progress.records.has("full_cat"):
+		if CAT_OUTFIT.all(bag.is_worn):
+			mark("full_cat")
+		elif is_instance_valid(session.network) and session.network.server():
+			for guest: WastelandLan.MemberState in session.network.joined_members():
+				if CAT_OUTFIT.all(guest.bag.is_worn):
+					mark("full_cat")
+					break
 	for row: Dictionary in entries:
 		var reward: String=row.reward
 		if reward!="" and bag.count(reward)>0: mark("owned_"+reward)

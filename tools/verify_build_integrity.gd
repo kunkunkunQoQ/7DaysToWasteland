@@ -201,10 +201,7 @@ func check_party(app: Node, hosting: bool) -> void:
 		s.hordes.next_herd = 99999
 		var home := s.start_position()
 		s.bag.add("frame", 2)
-		s.bag.add("iron_hammer", 1)
-		s.bag.assign("iron_hammer", 3)
 		s.bag.add("wood", 9)
-		var wood := s.bag.count("wood")
 		var base := Vector3i.ZERO
 		await physics_frame
 		for i in 72:
@@ -217,11 +214,15 @@ func check_party(app: Node, hosting: bool) -> void:
 		con.damage(wall, 10.0)
 		check(app.network.listen(19481) == OK, "construction loopback starts")
 		if await wait_for(func(): return not app.network.joined_members().is_empty()):
-			app.network.joined_members()[0].slot = 3
+			var guest: WastelandLan.MemberState = app.network.joined_members()[0]
+			guest.bag.add("iron_hammer", 1)
+			guest.bag.assign("iron_hammer", 3)
+			guest.bag.active = 3
+			guest.bag.add("wood", 9)
 			var eye := con.position_of(wall) + Vector3.BACK * 2.1
 			app.network.joined_members()[0].survivor.global_position = eye - Vector3.UP * app.network.joined_members()[0].survivor.eyes.position.y
 			check(await wait_for(func(): return con.blocks[wall].tier == 1), "guest completes damaged-frame repair and upgrade on authority")
-			check(s.bag.count("wood") == wood - 9 and con.blocks[wall].hp == 250.0, "host debits shared materials exactly once for both strikes")
+			check(guest.bag.count("wood") == 0 and s.bag.count("wood") == 9 and con.blocks[wall].hp == 250.0, "only the builder pays for the two strikes")
 			await create_timer(1.4).timeout
 			con.damage(base, 999.0)
 			check(not con.blocks.has(wall), "host removes unsupported guest-built wall")

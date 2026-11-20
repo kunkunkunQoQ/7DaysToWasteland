@@ -260,11 +260,13 @@ func host() -> void:
 	s.simulation_paused = false
 	if not check(app.network.listen(port) == OK, "sapling authority listens on ENet"): return
 	if not check(await until(func(): return not app.network.joined_members().is_empty()), "guest joins authority"): return
+	var inventory: WastelandBag = app.network.joined_members()[0].bag
+	inventory.add(item, 2)
 	app.network.joined_members()[0].survivor.global_position = feet
 	app.network.joined_members()[0].survivor.velocity = Vector3.ZERO
 	s.ui_command("marker", [Vector2(point.x, point.z), "plant-here"])
 	if not check(await until(func(): return is_instance_valid(plant_body(NETWORK_MODEL))), "guest main-hand press plants on authority"): return
-	if not check(s.bag.count(item) == 1 and rows().size() == 1 and s.bag.active == 1, "authority charges one shared item and preserves host's selected slot"): return
+	if not check(inventory.count(item) == 1 and s.bag.count(item) == 2 and rows().size() == 1 and s.bag.active == 1, "planting charges only the guest's sapling"): return
 	if not check(await until(func(): return marked("juvenile-seen")), "guest acknowledges the young tree"): return
 	s.clock.hours += Art.duration_days(NETWORK_MODEL) * 24.0 + 1.0
 	if not check(await until(func(): return chunk().standing_trees.has(id_for(NETWORK_MODEL))), "authority advances seedling into a real fir"): return
@@ -287,7 +289,7 @@ func guest() -> void:
 	aim(target)
 	await frames(14)
 	await press_main()
-	if not check(await until(func(): return is_instance_valid(plant_body(NETWORK_MODEL)) and s.bag.count("sapling_" + NETWORK_MODEL) == 1), "guest sees one shared debit and the planted juvenile"): return
+	if not check(await until(func(): return is_instance_valid(plant_body(NETWORK_MODEL)) and s.bag.count("sapling_" + NETWORK_MODEL) == 1), "guest sees one personal debit and the planted juvenile"): return
 	if not check(plant_body(NETWORK_MODEL).get_meta("kind", "") == "sapling" and rows().size() == 1, "guest sees only one young tree"): return
 	mark("juvenile-seen")
 	if not check(await until(func(): return chunk().standing_trees.has(id_for(NETWORK_MODEL))), "mature trunk replicates without reconnecting"): return

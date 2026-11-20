@@ -18,6 +18,12 @@ var pool: Array[WastelandCreature] = []
 var alive: Array[WastelandCreature] = []
 var rng := RandomNumberGenerator.new()
 const RARE_ODDS := 50000
+const COMMON_LOOT := ["cloth","scrap","powder","round","bandage"]
+const ROAM_DROP_CHANCE := 0.17
+const WAVE_DROP_CHANCE := 0.27
+const MAX_COMMON_YIELD := 4
+const MORPH_TROPHIES := {"armored":"meme_pot","swift":"meme_fins"}
+const LOCAL_FOX_TROPHY := "meme_clock"
 const TROPHIES := {
 	"walker":["meme_shades","meme_traffic"], "crawler":["meme_fins","meme_duck"],
 	"radiant":["meme_alien","meme_antenna"], "spitter":["meme_fins","meme_pot"],
@@ -217,8 +223,10 @@ func simulate(delta: float) -> void:
 			session.audio.play_at("alarm", player.camera.global_position + Vector3(0,2,-4), 1.28, false)
 			_announce("血月升起 · 守到 04:00", 6.0)
 			var supplies:={}
-			if session.progress.records.has("exp_well"): supplies.clean_water=2
-			if session.progress.records.has("exp_bridge"): supplies.bandage=2
+			for site: String in WastelandSession.Expeditions.WATCH_SUPPLIES:
+				if session.progress.records.has("exp_"+site):
+					var cargo: Dictionary = WastelandSession.Expeditions.WATCH_SUPPLIES[site]
+					for item: String in cargo: supplies[item] = int(supplies.get(item,0))+int(cargo[item])
 			if not supplies.is_empty():
 				session.award(supplies,player.global_position)
 				_announce("远征线路送达守夜补给 · "+session.catalog.requirements(supplies),5.0)
@@ -699,14 +707,13 @@ func defeated(actor: WastelandCreature) -> void:
 		session.spawn_drop(p + Vector3.UP * 0.1, harvest)
 	elif actor.spec.has("salvage"):
 		session.spawn_drop(p + Vector3.UP * 0.1, {str(actor.spec.salvage):rng.randi_range(1,2)})
-	elif rng.randf() < (0.27 if actor.wave else 0.17):
-		var id: String = ["cloth","scrap","powder","round","bandage"][rng.randi_range(0,4)]
-		session.spawn_drop(p + Vector3.UP * 0.1, {id:rng.randi_range(1,4)})
+	elif rng.randf() < (WAVE_DROP_CHANCE if actor.wave else ROAM_DROP_CHANCE):
+		var id: String = COMMON_LOOT[rng.randi_range(0,COMMON_LOOT.size()-1)]
+		session.spawn_drop(p + Vector3.UP * 0.1, {id:rng.randi_range(1,MAX_COMMON_YIELD)})
 	if TROPHIES.has(actor.type) and trophy_rng.randi_range(1,RARE_ODDS)==1:
 		var pool_items: Array = TROPHIES[actor.type].duplicate()
-		if actor.morph=="armored": pool_items.append("meme_pot")
-		elif actor.morph=="swift": pool_items.append("meme_fins")
-		elif actor.type=="fox" and actor.morph=="local": pool_items.append("meme_clock")
+		if MORPH_TROPHIES.has(actor.morph): pool_items.append(MORPH_TROPHIES[actor.morph])
+		elif actor.type=="fox" and actor.morph=="local": pool_items.append(LOCAL_FOX_TROPHY)
 		var trophy: String = pool_items[trophy_rng.randi_range(0,pool_items.size()-1)]
 		session.spawn_drop(p+Vector3.UP*0.35,{trophy:1})
 		session.gain(0,"rare_drop")

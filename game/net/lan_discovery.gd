@@ -5,8 +5,8 @@ signal changed
 const PORT := 47357
 const PORT_COUNT := 4
 const MAX_PLAYERS := 6
-const QUERY := "7DW/find/1"
-const ANSWER := "7DW/room/1"
+const QUERY := "7DW/find/2"
+const ANSWER := "7DW/room/2"
 const INTERVAL := 1500
 const EXPIRY := 5500
 var browser: PacketPeerUDP

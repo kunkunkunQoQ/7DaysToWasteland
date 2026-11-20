@@ -425,7 +425,9 @@ func _notification(what: int) -> void:
 			return
 		if session.controls_enabled and not session.death_screen:
 			_pause()
-		if session.slot > 0 and not session.replica and not session.death_screen:
+		if session.replica:
+			network.send_request("save", [])
+		elif session.slot > 0:
 			var result := session.save_now(false)
 			if result != OK:
 				_notify("后台保存失败 · 错误 %d" % result, 5.0)
@@ -435,6 +437,8 @@ func _handle_back() -> void:
 		return
 	if front.visible:
 		front.handle_back()
+	elif panels.visible and panels.active=="sources":
+		panels.return_from_sources()
 	elif panels.visible:
 		close_overlay()
 	else:

@@ -1,0 +1,9 @@
+[gd_resource type="Resource" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://game/actors/physics_character/config/rounded_feet.gd" id="1_feet"]
+
+[resource]
+script = ExtResource("1_feet")
+rolling_resistance_m = 0.015
+dry_joint_friction_nm = 1.40
+bearing_reference_radius_m = 0.040

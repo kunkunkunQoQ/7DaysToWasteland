@@ -24,6 +24,9 @@ func _init(snapshot: Dictionary = {}) -> void:
 	points = int(snapshot.get("points", 0))
 	skills = snapshot.get("skills", {}).duplicate()
 	records = snapshot.get("records", {}).duplicate()
+	# Older saves recorded wood when harvested, before pickups had their own count.
+	if not records.has("collected_wood"):
+		records.collected_wood = int(records.get("wood", 0))
 	job = int(snapshot.get("job", 0))
 	baseline = int(snapshot.get("baseline", 0))
 	accepted = bool(snapshot.get("accepted", false))

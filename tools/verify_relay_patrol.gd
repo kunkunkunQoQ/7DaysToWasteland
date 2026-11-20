@@ -169,9 +169,10 @@ func party(host: bool) -> void:
 		at_board(s.starting_cell)
 		app.network.joined_members()[0].survivor.global_position=s.player.global_position+Vector3.RIGHT
 		s.simulation_paused=false
+		var recipient: String = app.network.joined_members()[0].token
 		check(await until(func():return s.Patrol.completed(s)==1,15.0),"guest cashes in host's field work")
 		await until(func():return app.network.joined_members().is_empty(),10.0)
-		check(s.save_now(false)==OK and WastelandSave.read(1).progress.records.get("relay_patrol")==1 and s.bag.count("steel")==4,"shared reward survives host save once")
+		check(s.save_now(false)==OK and WastelandSave.read(1).guests[recipient].bag.counts.get("steel")==4 and s.bag.count("steel")==0 and s.progress.records.get("relay_patrol")==1,"one patrol reward persists in the claimant's inventory")
 	else:
 		check(app.network.connect_to("127.0.0.1",port)==OK,"client connects")
 		if not await until(func():return is_instance_valid(app.session) and app.session.replica,15.0):

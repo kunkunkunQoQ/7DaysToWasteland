@@ -123,12 +123,13 @@ func network_check(app:Node,host:bool)->void:
 		s.progress.records.exp_canal=1
 		s.progress.records.exp_well=1
 		s.bag.add("composite_filter",1)
-		s.bag.assign("composite_filter",0)
 		check(app.network.listen(19468)==OK,"host starts")
 		if await until(func():return not app.network.joined_members().is_empty()):
+			var inventory: WastelandBag = app.network.joined_members()[0].bag
+			inventory.add("composite_filter",1)
 			app.network.joined_members()[0].survivor.global_position=well+Vector3(0,0.12,1.85)
-			check(await until(func():return s.bag.count("clean_water")==6),"guest use consumes one shared filter on authority")
-			check(s.bag.count("composite_filter")==0,"host sees exact shared debit")
+			check(await until(func():return inventory.count("clean_water")==6),"guest receives six waters from their filter")
+			check(inventory.count("composite_filter")==0 and s.bag.count("composite_filter")==1,"only the guest pays for the batch")
 			await until(func():return app.network.joined_members().is_empty())
 		else: check(false,"guest joined")
 	else:

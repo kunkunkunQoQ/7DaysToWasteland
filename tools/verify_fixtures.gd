@@ -127,7 +127,7 @@ func run() -> void:
 	var seeds:=int(stock().get("seed_potato",0))
 	shoot(planted,20)
 	check(not session.construction.crops.has(cell) and planted.is_queued_for_deletion() and int(stock().get("seed_potato",0))==seeds+1,"uproot planted crop and recover its seed")
-	session.fx.drop_records["test_buoy"]={"point":ground,"items":{"fiber":5},"buoy":true}
+	session.fx.store_drop("test_buoy",{"point":ground,"items":{"fiber":5},"buoy":true})
 	session.fx._resync_drops()
 	var buoy: StaticBody3D=session.fx.drop_live["test_buoy"]
 	before=stock()
@@ -160,10 +160,11 @@ func network_test(host: bool, flags: PackedStringArray) -> void:
 		settings.terrain_revision=2
 		app._enter_world(settings,{},1,false)
 		session=app.session
-		session.bag.add("wood",3)
-		session.bag.add("fiber",2)
 		check(app.network.listen(port)==OK,"host listens on selected ENet port")
 		if await wait_for(func(): return not app.network.joined_members().is_empty()):
+			var inventory: WastelandBag = app.network.joined_members()[0].bag
+			inventory.add("wood",3)
+			inventory.add("fiber",2)
 			var board:=fixture(SHORE,"trader")
 			var at:=board.global_position+Vector3(1.9,-0.85,0)
 			app.network.joined_members()[0].survivor.global_position=at
@@ -172,7 +173,7 @@ func network_test(host: bool, flags: PackedStringArray) -> void:
 				shoot(board,4000)
 				check(fixture(SHORE,"trader")==null,"host destroys board after guest sees it intact")
 				check(await wait_for(func(): return fixture(SHORE,"trader")!=null),"authority restores board on guest request")
-				check(session.bag.count("wood")==0 and session.bag.count("fiber")==0,"authority charges rebuilding supplies exactly once")
+				check(inventory.count("wood")==0 and inventory.count("fiber")==0,"authority charges the builder's supplies exactly once")
 				check(await wait_for(func(): return session.marker_records.size()==2),"guest acknowledges rebuilt board")
 			else: check(false,"guest acknowledged initial board")
 		else: check(false,"host accepts guest")

@@ -76,6 +76,8 @@ func host()->void:
 		var person:=state(i)
 		if check(person!=null and person.survivor.profile==PROFILES[i-1] and person.avatar.player_name==name_for(i),"guest %d has its own survivor, outfit and nickname"%i):
 			unique[person.peer_id]=true
+			check(person.bag.counts.is_empty(),"guest %d starts with an empty backpack"%i)
+			person.bag.add(HANDS[i-1],1)
 	check(unique.size()==5,"each guest has a unique ENet peer ID")
 	mark("full")
 	# The discovery service and a real sixth client must both respect the cap.
@@ -99,16 +101,17 @@ func host()->void:
 		if s.marker_records.size()!=5: return false
 		for i in range(1,6):
 			var person:=state(i)
-			if person==null or person.slot!=i-1 or person.offhand!=HANDS[i-1] or person.input.is_empty(): return false
+			if person==null or person.bag.active!=i-1 or person.bag.offhand!=HANDS[i-1] or person.input.is_empty(): return false
 			if absf(float(person.input.get("yaw",0.0))-float(i)*0.4)>0.05: return false
 			if bool(int(person.input.get("held",0)) & app.network._bit("crouch"))!=(i%2==0): return false
 		return true),"five independent input streams, slots, offhands and commands"): return
-	check(s.bag.active==7 and s.bag.offhand=="torch" and s.bag.partner_offhands.count("torch")==2 and s.bag.partner_offhands.count("improvised_shield")==2 and s.bag.partner_offhands.count("field_glasses")==1,"host keeps slot and own offhand; all five reservations coexist")
+	check(s.bag.active==7 and s.bag.offhand=="torch" and s.bag.count("torch")==3 and s.bag.available_count("improvised_shield")==2,"guest equipment leaves all of the host's items available")
 	s.bag.set_offhand("improvised_shield")
-	check(s.bag.offhand=="torch" and s.bag.available_count("improvised_shield")==0,"host cannot take either of two reserved shields")
+	check(s.bag.offhand=="improvised_shield" and state(3).bag.offhand=="improvised_shield" and state(4).bag.offhand=="improvised_shield","three players independently equip the same kind of shield")
+	s.bag.set_offhand("torch")
 	mark("locked")
 	if not check(await until(func():return all_marked("locked")),"all clients receive full roster, private state and shared markers"): return
-	check(state(1).offhand=="torch" and state(5).offhand=="field_glasses","failed competing offhand request cannot steal last item")
+	check(state(1).bag.offhand=="torch" and state(5).bag.offhand=="field_glasses","one guest cannot equip an item in another backpack")
 	mark("rename")
 	if not check(await until(func():return state(3).nickname=="Renamed" and state(3).appearance=="bronx" and all_marked("rename")),"live guest nickname and outfit relay to every other peer"): return
 	# Deliberately damage a different guest while guest 2 owns the simulation
@@ -121,7 +124,7 @@ func host()->void:
 	var owner_before:=s.player.health
 	app.network._as_member(s,interrupted,func():
 		victim.survivor.damage(18.0,"fall")
-		check(s.player==interrupted.survivor and s.actor_peer_id==interrupted.peer_id and s.bag.offhand==interrupted.offhand,"nested damage restores interrupted guest context"))
+		check(s.player==interrupted.survivor and s.actor_peer_id==interrupted.peer_id and s.bag==interrupted.bag,"nested damage restores interrupted guest's backpack"))
 	check(is_equal_approx(victim.survivor.health,before-18.0) and is_equal_approx(interrupted.survivor.health,other_before) and is_equal_approx(s.player.health,owner_before) and s.actor_peer_id==1 and s.bag.offhand=="torch","damage is attributed only to actual victim and host context is restored")
 	mark("hurt")
 	if not check(await until(func():return all_marked("hurt")),"only the victim receives damage"): return
@@ -183,23 +186,33 @@ func host()->void:
 	mark("chest")
 	if not check(await until(func():return all_marked("chest")),"all guests receive their own chest panels"): return
 	mark("take")
-	if not check(await until(func():return all_marked("take") and s.bag.count("wood")==initial_wood+3),"five concurrent requests on a three-unit stack transfer exactly three units"): return
-	check(s.chest_view(key).items.is_empty(),"shared stack is empty, not duplicated")
+	if not check(await until(func():return all_marked("take")),"five clients finish their simultaneous chest requests"): return
+	var collected:=0
+	for i in range(1,6):
+		var amount:=state(i).bag.count("wood")
+		check(amount<=1,"guest %d receives at most its requested unit"%i)
+		collected+=amount
+	check(s.bag.count("wood")==initial_wood and collected==3 and s.chest_view(key).items.is_empty(),"all three units reach individual guest backpacks exactly once")
 	# Only guest 5 leaves while the other five viewers remain.
-	last.survivor.health=last.survivor.max_health()*0.55
+	var leaving_health:=last.survivor.max_health()*0.55
+	last.survivor.health=leaving_health
 	var old_peer:=last.peer_id
+	var last_items:=last.bag.counts.duplicate()
 	mark("leave")
 	if not check(await until(func():return state(5)==null and all_marked("leave")),"one guest departs while four others remain connected"): return
 	check(app.network.player_count()==5 and not s.cache_inventory.actors.has(old_peer) and s.cache_inventory.actors.size()==5 and model.opened,"departing guest clears only its own chest viewer")
-	check(s.bag.partner_offhands.size()==4 and s.bag.available_count("field_glasses")==1,"departing guest releases only its offhand")
+	check(s.bag.available_count("field_glasses")==1,"leaving guest keeps its own field glasses")
+	var departure:Dictionary=WastelandSave.read(1).get("guests",{}).get(identity(5),{})
+	check(departure.get("bag",{}).get("counts",{})==last_items and absf(float(departure.get("health",0))-leaving_health)<1.0,"leaving saves that guest's latest backpack and health to disk automatically")
 	check(s.save_now(false)==OK,"authority saves with one guest offline")
 	var save:=WastelandSave.read(1)
-	check(save.guests.size()==5 and save.guests[identity(5)].slot==4 and save.guests[identity(5)].offhand=="field_glasses","all five identities persist separately including the departed player")
+	var offline_bag:Dictionary=save.guests[identity(5)].bag
+	check(save.guests.size()==5 and offline_bag.active==4 and offline_bag.gear.offhand=="field_glasses" and offline_bag.counts==last_items,"all five identities persist separately including the departed player's loot")
 	mark("rejoin")
 	if not check(await until(func():return state(5)!=null and all_marked("rejoin")),"departed person rejoins and all other clients see the roster recover"): return
 	var returning:=state(5)
-	check(returning.peer_id!=old_peer and returning.slot==4 and returning.offhand=="field_glasses" and absf(returning.survivor.health/returning.survivor.max_health()-0.55)<0.06,"reconnect restores that guest's own health, slot and offhand")
-	check(app.network.player_count()==6 and s.bag.partner_offhands.size()==5,"reused slot returns room to 6/6")
+	check(returning.peer_id!=old_peer and returning.bag.active==4 and returning.bag.offhand=="field_glasses" and returning.bag.counts==last_items and absf(returning.survivor.health/returning.survivor.max_health()-0.55)<0.06,"reconnect restores that guest's own health, slot and backpack")
+	check(app.network.player_count()==6,"reused slot returns room to 6/6")
 	mark("finish")
 	check(await until(func():return all_marked("finish")),"all five clients finish while the room is still open")
 
@@ -233,11 +246,11 @@ func client()->void:
 	s.ui_command("slot",[guest-1])
 	s.ui_command("offhand",[HANDS[guest-1]])
 	s.ui_command("marker",[Vector2(guest*3,guest*2),"six-%d"%guest])
-	if not check(await until(func():return marked("locked") and s.bag.active==guest-1 and s.bag.offhand==HANDS[guest-1] and s.bag.partner_offhands.size()==5 and s.marker_records.size()==5),"private slot and offhand alongside five shared updates"): return
+	if not check(await until(func():return marked("locked") and s.bag.active==guest-1 and s.bag.offhand==HANDS[guest-1] and s.bag.counts=={HANDS[guest-1]:1} and s.marker_records.size()==5),"guest receives only its own backpack alongside shared map updates"): return
 	if guest==1:
 		s.ui_command("offhand",["field_glasses"])
 		await create_timer(1.0).timeout
-		check(s.bag.offhand=="torch","guest cannot take another guest's last reserved item")
+		check(s.bag.offhand=="torch" and s.bag.count("field_glasses")==0,"guest cannot equip another player's field glasses")
 	mark("locked"+str(guest))
 	if not await until(func():return marked("rename")): check(false,"rename phase"); return
 	if guest==3:

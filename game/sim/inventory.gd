@@ -2,6 +2,7 @@ class_name WastelandBag
 extends RefCounted
 
 signal acquired(id: String)
+signal changed
 
 const STACK_SLOTS := 27
 const ROW_SIZE := 9
@@ -14,16 +15,21 @@ var counts: Dictionary = {}
 var bar: Array = ["", "", "", "", "", "", "", ""]
 # Automatic bindings expire with the last unit. Player-assigned bindings survive until replaced.
 var automatic_shortcuts: Dictionary = {}
-var active := 0
+var active := 0:
+	set(value):
+		if active != value:
+			active = value
+			changed.emit()
 var gear := {"head":"","body":"","hands":"","feet":""}
 var offhand: String:
 	get: return str(gear.get("offhand",""))
-# One reservation per other player. Equal item IDs represent distinct units.
-var partner_offhands: Array[String] = []
 # Older saves and callers store the torso slot as "armor".
 var armor: String:
 	get: return gear.body
-	set(value): gear.body = value
+	set(value):
+		if gear.body != value:
+			gear.body = value
+			changed.emit()
 var magazine: Dictionary = {}
 
 func _init(data: WastelandCatalog, snapshot: Dictionary = {}) -> void:
@@ -35,7 +41,6 @@ func _init(data: WastelandCatalog, snapshot: Dictionary = {}) -> void:
 			bar[index] = str(saved_bar[index])
 		automatic_shortcuts = snapshot.get("automatic_shortcuts", {}).duplicate()
 		active = clampi(int(snapshot.get("active", 0)), 0, HOTBAR_SIZE - 1)
-		partner_offhands.assign(snapshot.get("partner_offhands",[]))
 		restore_gear(snapshot)
 		magazine = snapshot.get("magazine", {}).duplicate()
 
@@ -62,12 +67,15 @@ func is_worn(id:String)->bool:
 	return false
 
 func set_offhand(id:String)->void:
+	if id==offhand: return
 	if id=="":
 		gear.erase("offhand")
+		changed.emit()
 		return
 	if available_count(id)<=0 or not catalog.items.has(id): return
 	if is_worn(id) and available_count(id)==1: toggle_gear(id)
 	gear.offhand=id
+	changed.emit()
 
 func swap_hands()->void:
 	var main:=current()
@@ -100,6 +108,7 @@ func toggle_gear(id: String) -> void:
 		else:
 			if gear.get(slot,"")!=id and offhand==id and available_count(id)==1: gear.erase("offhand")
 			gear[slot] = "" if gear.get(slot,"")==id else id
+		changed.emit()
 
 func gear_bonus(stat: String) -> float:
 	var total := 0.0
@@ -110,18 +119,18 @@ func gear_bonus(stat: String) -> float:
 func count(id: String) -> int:
 	return int(counts.get(id, 0))
 
+func set_loaded_rounds(id: String, rounds: int) -> void:
+	if magazine.get(id,0) != rounds:
+		magazine[id] = rounds
+		changed.emit()
+
 func available_count(id:String)->int:
-	return maxi(0,count(id)-partner_offhands.count(id))
+	return count(id)
 
 func current() -> String:
 	var id: String = bar[active]
-	return id if _mainhand_units(id,offhand)>0 else ""
-
-func partner_needs_last_mainhand(id:String,partner_slot:int,partner_hand:String)->bool:
-	return id==bar[partner_slot] and _mainhand_units(id,partner_hand)==1
-
-func _mainhand_units(id:String,secondary:String)->int:
-	return count(id)-partner_offhands.count(id)-int(offhand==id)-int(secondary==id and is_worn(id))
+	var reserved := 1 + int(is_worn(id)) if offhand == id else 0
+	return id if count(id) > reserved else ""
 
 func stack_size(id: String) -> int:
 	return maxi(1, int(catalog.items.get(id, {}).get("stack", 99)))
@@ -155,6 +164,7 @@ func add(id: String, amount: int) -> int:
 				bar[slot] = id
 				automatic_shortcuts[id] = true
 		if existing==0: acquired.emit(id)
+		changed.emit()
 	return moved
 
 func has_all(items: Dictionary) -> bool:
@@ -166,7 +176,10 @@ func has_all(items: Dictionary) -> bool:
 func spend(items: Dictionary) -> bool:
 	if not has_all(items):
 		return false
+	var did_spend := false
 	for id in items:
+		if int(items[id]) == 0: continue
+		did_spend = true
 		var left := count(id) - int(items[id])
 		if left > 0:
 			counts[id] = left
@@ -180,13 +193,17 @@ func spend(items: Dictionary) -> bool:
 				if gear[slot]!=id: continue
 				if slot=="offhand" or slot in EXTRA_SLOTS: gear.erase(slot)
 				else: gear[slot]=""
+	if did_spend:
+		changed.emit()
 	return true
 
-func transfer(source: Dictionary) -> int:
+func transfer(source: Dictionary, received: Variant = null) -> int:
 	var total := 0
 	for id in source.keys():
 		var moved := add(id, int(source[id]))
 		total += moved
+		if moved > 0 and received != null:
+			received[id] = int(received.get(id, 0)) + moved
 		source[id] = int(source[id]) - moved
 		if source[id] <= 0:
 			source.erase(id)
@@ -195,12 +212,15 @@ func transfer(source: Dictionary) -> int:
 func assign(id: String, index: int) -> void:
 	if index < 0 or index >= HOTBAR_SIZE or (id != "" and count(id) == 0):
 		return
+	if bar[index] == id and not automatic_shortcuts.has(id):
+		return
 	var old := bar.find(id) if id != "" else -1
 	automatic_shortcuts.erase(id)
 	automatic_shortcuts.erase(bar[index])
 	if old >= 0:
 		bar[old] = bar[index]
 	bar[index] = id
+	changed.emit()
 
 func rating() -> int:
 	var weapon := 0

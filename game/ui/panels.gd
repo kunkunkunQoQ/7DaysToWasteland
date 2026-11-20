@@ -49,6 +49,7 @@ var recipe_fingerprint := 0
 var favorite_button: Button
 var detail_title: Label
 var material_link: Button
+var source_link: Button
 var detail_description: Label
 var selection := ""
 var good_counts := -1
@@ -92,6 +93,7 @@ func show_panel(id: String, session_node: WastelandSession, context: Variant = n
 	quick_slots = null
 	item_detail = null
 	material_link = null
+	source_link = null
 	inventory_buttons.clear()
 	recipe_list = null
 	favorite_button = null
@@ -125,6 +127,7 @@ func show_panel(id: String, session_node: WastelandSession, context: Variant = n
 	if id=="trade": page_title=session.board_destination().name
 	if id=="chest": page_title="容器"
 	if id=="materials": page_title="材料用途"
+	if id=="sources": page_title="物品获取方式"
 	if session.stream.generator.revision>=3:
 		if id=="map": page_title="荒原地图"
 		if id=="ending": page_title="荒原收到回信"
@@ -149,10 +152,20 @@ func show_panel(id: String, session_node: WastelandSession, context: Variant = n
 			cache.out_of_reach.connect(func():
 				if visible and active=="chest" and current_context==context: game.close_overlay())
 			cache.setup(session,str(context))
-		"craft": _craft(context)
+		"craft":
+			if context is Dictionary:
+				current_context = context.cell
+				_craft(current_context,context)
+			else: _craft(context)
 		"skills": _skills()
 		"journal": _journal(false)
 		"field": _field_notes()
+		"sources":
+			var guide := preload("res://game/ui/material_guide.gd").new()
+			body.add_child(guide)
+			var labels := {"bag":"返回背包","field":"返回探索手记","craft":"返回配方"}
+			guide.setup(session.catalog,context.item,labels[context.origin],true)
+			guide.returned.connect(return_from_sources)
 		"materials":
 			var guide := preload("res://game/ui/material_guide.gd").new()
 			var from_bag := context is String and session.catalog.items.has(context)
@@ -183,6 +196,25 @@ func show_panel(id: String, session_node: WastelandSession, context: Variant = n
 	show()
 	var target := scroll_target if is_instance_valid(scroll_target) else close
 	target.grab_focus()
+
+func _open_item_sources(id: String) -> void:
+	if not session.catalog.items.has(id): return
+	var from := {"item":id,"origin":active}
+	if active=="craft":
+		from.recipe = {"cell":current_context,"selection":selection,"quantity":craft_quantity,
+			"view":recipe_view,"query":recipe_query}
+	game.open_panel("sources",from)
+
+func return_from_sources() -> void:
+	var from: Dictionary = current_context
+	match from.origin:
+		"bag": game.open_panel("bag",from.item)
+		"craft":
+			var resume: Dictionary = from.recipe
+			if resume.cell != null and not session.construction.blocks.has(resume.cell):
+				game.open_panel("craft")
+			else: game.open_panel("craft",resume)
+		_: game.open_panel("field")
 
 func update_status(words: String, duration: float) -> void:
 	if is_instance_valid(status_line):
@@ -217,7 +249,7 @@ func _process(delta: float) -> void:
 	if is_instance_valid(queue_label):
 		_refresh_queue()
 		if is_instance_valid(favorite_button):
-			var fingerprint := hash([session.bag.counts,session.bag.partner_offhands,session.progress.skills,_station_record().get("molten",{})])
+			var fingerprint := hash([session.bag.counts,session.progress.skills,_station_record().get("molten",{})])
 			if fingerprint != recipe_fingerprint:
 				recipe_fingerprint = fingerprint
 				_filter_recipes(recipe_query)
@@ -340,7 +372,12 @@ func _bag() -> void:
 	scroll.add_child(detail_description)
 	detail_description.size_flags_horizontal=Control.SIZE_EXPAND_FILL
 	summary.add_child(scroll)
-	summary.add_child(material_link)
+	var links:=S.column(summary,2)
+	source_link=S.button("获取方式",func(): _open_item_sources(selection))
+	for link:Button in [source_link,material_link]:
+		link.custom_minimum_size.y=27
+		link.add_theme_font_size_override("font_size",16)
+		links.add_child(link)
 	var actions:=S.line(left)
 	assign_button=S.button("放入当前快捷格",func():
 		session.ui_command("assign",[selection])
@@ -544,6 +581,7 @@ func _bag_details() -> void:
 	discard_button.disabled=not owned or item.get("kind","")=="quest"
 	discard_button.tooltip_text="任务物品不能丢弃" if item.get("kind","")=="quest" else "%s · 正在使用的最后一件需要再次确认"%game.options.action_name("discard") if session.discard_protected(selection) else "%s · 丢弃所选物品一件"%game.options.action_name("discard")
 	material_link.visible = session.catalog.is_material(selection) and bag.count(selection)>0
+	source_link.visible = bag.count(selection)>0 and not item.is_empty()
 	var details := "当前快捷格 %d / %s" % [bag.active+1,session.catalog.title(active_id) if active_id!="" else "空"]
 	if item.is_empty() or bag.count(selection) <= 0:
 		detail_title.text = "选择一个物品"
@@ -592,12 +630,12 @@ func _consume_selected() -> void:
 	_bag_details()
 
 func _bag_fingerprint() -> int:
-	return hash([session.bag.counts,session.bag.active,session.bag.gear,session.bag.bar,session.bag.partner_offhands])
+	return hash([session.bag.counts,session.bag.active,session.bag.gear,session.bag.bar])
 
-func _craft(context: Variant) -> void:
-	recipe_view="全部"
-	recipe_query=""
-	craft_quantity=1
+func _craft(context: Variant, resume: Dictionary = {}) -> void:
+	recipe_view=resume.get("view","全部")
+	recipe_query=resume.get("query","")
+	craft_quantity=resume.get("quantity",1)
 	craft_collect=null
 	station="hand" if context==null else str(session.construction.blocks.get(context,{}).get("device","hand"))
 	var columns:=_columns()
@@ -610,6 +648,7 @@ func _craft(context: Variant) -> void:
 	var filter:=LineEdit.new()
 	filter.name="RecipeSearch"
 	filter.placeholder_text="搜索配方、成品或材料"
+	filter.text=recipe_query
 	filter.clear_button_enabled=true
 	filter.custom_minimum_size.y=38
 	left.add_child(filter)
@@ -644,7 +683,7 @@ func _craft(context: Variant) -> void:
 	material_scroll.horizontal_scroll_mode=ScrollContainer.SCROLL_MODE_DISABLED
 	material_scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL
 	material_scroll.custom_minimum_size.y=68
-	right.add_child(S.label("所需材料　·　持有 / 消耗",16,S.MUTED))
+	right.add_child(S.label("所需材料　·　持有 / 消耗　·　点选查看出处",16,S.MUTED))
 	right.add_child(material_scroll)
 	detail_description=S.label("",16,S.TEXT,true)
 	detail_description.size_flags_horizontal=Control.SIZE_EXPAND_FILL
@@ -697,8 +736,10 @@ func _craft(context: Variant) -> void:
 			_refresh_recipe(),true)
 		actions.add_child(craft_collect)
 		if station=="campfire": actions.add_child(S.button("休息",func():session.ui_command("rest",[context])))
-	if station=="hand" and session.progress.records.has("first_axe_guide"): selection="stone_axe"
-	_filter_recipes("")
+	if not resume.is_empty(): selection=resume.selection
+	elif station=="hand" and session.progress.records.has("first_axe_guide"): selection="stone_axe"
+	_filter_recipes(recipe_query)
+	if not resume.is_empty(): _scroll_to_recipe.call_deferred()
 	_refresh_queue()
 
 func _craft_queue() -> Array:
@@ -833,7 +874,7 @@ func _refresh_recipe() -> void:
 		lines.append("需要专长　%s %d"%[session.catalog.skills[data.skill[0]].name,data.skill[1]])
 	if _craft_queue().size()>=8: lines.append("队列已满")
 	var materials:Array=[]
-	craft_materials.columns=2 if craft_materials.get_parent_control().size.x>=390 else 1
+	craft_materials.columns=2 if craft_materials.get_parent_control().size.x>=540 else 1
 	for id:String in data.inputs:
 		var available:=WastelandSession.Fire.available(session.bag,_station_record(),id)
 		var need:=int(data.inputs[id])*craft_quantity
@@ -849,6 +890,19 @@ func _show_craft_items(container:Container,entries:Array)->void:
 		container.remove_child(node)
 		node.queue_free()
 	for entry:Array in entries:
+		if container==craft_materials:
+			var link:=S.button(entry[1],_open_item_sources.bind(entry[0]))
+			link.set_meta("item",entry[0])
+			link.alignment=HORIZONTAL_ALIGNMENT_LEFT
+			link.icon=WastelandItemArt.icon(entry[0],session.catalog.items[entry[0]])
+			link.texture_filter=CanvasItem.TEXTURE_FILTER_NEAREST
+			link.add_theme_constant_override("icon_max_width",26)
+			link.add_theme_font_size_override("font_size",16)
+			link.custom_minimum_size.y=36
+			link.tooltip_text="查看%s的获取方式"%session.catalog.title(entry[0])
+			if entry[2]: link.add_theme_color_override("font_color",S.RED)
+			container.add_child(link)
+			continue
 		var row:=S.line(container)
 		var image:=TextureRect.new()
 		image.custom_minimum_size=Vector2(28,28)
@@ -1042,7 +1096,7 @@ func _journal(at_board: bool) -> void:
 			game.hud.tracked_expedition="" if game.hud.tracked_expedition==route.route else route.route
 			show_panel(active,session)))
 	if at_board:
-		body.add_child(S.button("从物资柜兑换每日储备（废铁 ×8）",func(): session.ui_command("barter")))
+		body.add_child(S.button("从物资柜兑换每日储备（%s）" % session.catalog.requirements(WastelandSession.TRADE_COST),func(): session.ui_command("barter")))
 	else:
 		body.add_child(S.label("最近的%s可接取委托、交付物资或兑换储备。" % session.board_destination().name,16,S.MUTED))
 
@@ -1087,6 +1141,7 @@ func _field_notes() -> void:
 	var guide := preload("res://game/ui/field_guide.gd").new()
 	guide.session = session
 	guide.materials_requested.connect(func(): game.open_panel("materials"))
+	guide.sources_requested.connect(func(): _open_item_sources("fiber"))
 	body.add_child(guide)
 
 func _ending(receipt: Variant) -> void:
@@ -1284,7 +1339,7 @@ func _vehicle(id: String) -> void:
 		if not damaged: condition.text += "　·　耐久 %d / %d"%[ceili(hp),ceili(maximum)]
 		if move_focus and not repair.visible:
 			pack.grab_focus()
-	# Remote repairs and shared inventory changes arrive with the next world snapshot.
+	# Remote repairs and the player's inventory arrive with the next world snapshot.
 	var timer := Timer.new()
 	timer.wait_time = 0.2
 	body.add_child(timer)

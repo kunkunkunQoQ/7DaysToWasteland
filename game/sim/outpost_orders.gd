@@ -3,6 +3,11 @@ extends RefCounted
 const RELAYS := ["tower","police","hospital","lodge"]
 const DEPOT := Vector2(23,20)
 const VAT := Vector2(11,23)
+const LOCAL_REWARD := {"clean_water":2,"bandage":1}
+const DISPATCH_REWARDS := [
+	{"spring":2,"electronics":3,"clean_water":2}, {"parts":5,"wire":4,"bandage":2},
+	{"leather":4,"round":8,"clean_water":1}, {"iron_ore":5,"electronics":2,"medkit":1}
+]
 
 static func fixtures(chunk: WastelandChunk) -> void:
 	if chunk.site not in RELAYS: return
@@ -72,10 +77,9 @@ static func orders(s:Node,origin:Vector2i) -> Array[Dictionary]:
 		source="驻地蓄水槽"
 	var destination:=relay(s,origin)
 	var end:=Vector2(destination*32)+DEPOT
-	var reward:Dictionary=[{"spring":2,"electronics":3,"clean_water":2},{"parts":5,"wire":4,"bandage":2},
-		{"leather":4,"round":8,"clean_water":1},{"iron_ore":5,"electronics":2,"medkit":1}][i]
+	var reward:Dictionary=DISPATCH_REWARDS[i].duplicate()
 	return [{"id":"local_%s_%d"%[WastelandTerrainGen.grid_key(origin),day],"name":"驻地补给 · "+s.catalog.title(material),
-		"story":"就近收集后带回发单公告板。","inputs":{material:3},"reward":{"clean_water":2,"bandage":1},"xp":38,
+		"story":"就近收集后带回发单公告板。","inputs":{material:3},"reward":LOCAL_REWARD.duplicate(),"xp":38,
 		"tier":"local","source":source,"at":at,"board":board,"origin":origin},
 		{"id":"dispatch_%s_%d"%[WastelandTerrainGen.grid_key(origin),day],"name":"远行运单 · "+str(s.catalog.sites[s.stream.generator.site_for(destination)].name),
 		"story":"先在本站登记，前往中继寄存柜签收一个货包，在今日结束前返回本站交货。","inputs":{"dispatch_parcel":1},"reward":reward,"xp":90,

@@ -90,6 +90,9 @@ func wood() -> int:
 
 func item_total(id: String) -> int:
 	var total := s.bag.count(id)
+	if app.network.server():
+		for member: WastelandLan.MemberState in app.network.joined_members():
+			total += member.bag.count(id)
 	for drop: Dictionary in s.fx.drop_records.values(): total += int(drop.items.get(id, 0))
 	return total
 
@@ -382,8 +385,9 @@ func host() -> void:
 	if not check(await until(func(): return marked("tree-landed")), "guest observed replicated fall, hit and wood"): return
 	check(member.health < before and contacts.count("guest/" + app.network.joined_members()[0].token) == 1 and not contacts.has("host"), "authority hits exposed guest once and spares cutter")
 	check(wood() == total + int(WastelandSession.RESOURCES.oak[2].wood) and active_falls().is_empty(), "one complete host payout across network acknowledgements")
-	check(item_total("stick") >= sticks_before + 2 and item_total("tree_leaf") > leaves_before + 1, "host holds both leaf payouts and several canopy sticks")
-	mark("canopy-%d-%d" % [item_total("stick"), item_total("tree_leaf")])
+	check(item_total("stick") >= sticks_before + 2 and item_total("tree_leaf") > leaves_before + 1, "both leaf payouts and several canopy sticks survive across the ground and both bags")
+	mark("wood-%d" % [wood() - s.bag.count("wood")])
+	mark("canopy-%d-%d" % [item_total("stick") - s.bag.count("stick"), item_total("tree_leaf") - s.bag.count("tree_leaf")])
 	mark("tree-finished")
 	await until(func(): return app.network.joined_members().is_empty(), 8000)
 
@@ -392,13 +396,12 @@ func guest() -> void:
 	if not check(await until(func(): return is_instance_valid(app.session) and app.session.replica and app.session.stream.active.has(CELL)), "guest streams target cell"): return
 	s = app.session
 	if not check(await until(func(): return s.player.global_position.distance_to(ground(CENTER + FALL * 3.3)) < 0.6 and trunk() != null), "guest sees intact oak at replicated position"): return
-	var total := wood()
 	var before := s.player.health
 	mark("tree-ready")
 	if not check(await until(func(): return is_instance_valid(s) and chunk().timber_visuals.has(INDEX) and trunk() != null and active_falls().is_empty()), "guest mirrors partial notch on the standing oak"): return
 	mark("tree-cut")
 	if not check(await until(func(): return not active_falls().is_empty()), "guest receives animated fall"): return
-	if not check(await until(func(): return s.player.health < before and s.player.injury.last_source == "timber" and stump() != null and active_falls().is_empty() and wood() == total + int(WastelandSession.RESOURCES.oak[2].wood)), "guest sees authoritative timber injury, stump and exactly one timber yield"): return
+	if not check(await until(func(): return s.player.health < before and s.player.injury.last_source == "timber" and stump() != null and active_falls().is_empty()), "guest sees the authoritative timber injury, stump and completed fall"): return
 	mark("tree-landed")
 	check(await until(func(): return marked("tree-finished")), "guest receives host confirmation")
-	check(await until(func(): return marked("canopy-%d-%d" % [item_total("stick"),item_total("tree_leaf")])), "guest and host agree on exact stick and leaf totals including collected items")
+	check(await until(func(): return marked("wood-%d" % wood()) and marked("canopy-%d-%d" % [item_total("stick"),item_total("tree_leaf")])), "guest sees the exact timber, stick and leaf totals on the ground and in its own bag")

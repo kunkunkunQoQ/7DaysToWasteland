@@ -1,0 +1,23 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://game/actors/physics_character/physics_character.gd" id="1_character"]
+[ext_resource type="Resource" path="res://game/actors/physics_character/config/default.tres" id="2_config"]
+[ext_resource type="Script" path="res://game/actors/physics_character/body/physics_rig.gd" id="3_rig"]
+[ext_resource type="Script" path="res://game/actors/physics_character/controllers/intent_controller.gd" id="4_controller"]
+[ext_resource type="Script" path="res://game/actors/physics_character/visual/physics_character_visual.gd" id="5_visual"]
+
+[node name="PhysicsCharacter" type="Node3D"]
+script = ExtResource("1_character")
+config = ExtResource("2_config")
+
+[node name="PhysicsRig" type="Node3D" parent="."]
+script = ExtResource("3_rig")
+
+[node name="Controller" type="Node" parent="."]
+script = ExtResource("4_controller")
+
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("5_visual")
+
+[connection signal="configured" from="." to="Visual" method="setup"]
+[connection signal="state_updated" from="." to="Visual" method="sync_state"]
