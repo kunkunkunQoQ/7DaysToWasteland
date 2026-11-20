@@ -1,11 +1,19 @@
 <h1 align="center">七日荒原</h1>
+<p align="center">
+  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/tag/v0.6.5"><img src="https://img.shields.io/badge/version-0.6.5-815526?style=flat-square" alt="游戏版本 0.6.5"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20x64%20%7C%20Android-475569?style=flat-square" alt="支持 Windows x64 和 Android">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL%203.0-45654D?style=flat-square" alt="开源许可 GPL 3.0，仅限第 3 版"></a>
+</p>
+
 <p align="center"><i>7 Days to Wasteland</i> · 开放世界生存 · 单人 / 双人局域网</p>
 
+<h2 align="center">下载游戏</h2>
 <p align="center">
-  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/download/v0.6.5/7DaysToWasteland-Windows-x64.zip"><strong>下载 Windows x64 版</strong></a>　·　
-  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/download/v0.6.5/7DaysToWasteland.apk"><strong>下载安卓 APK</strong></a>　·　
-  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/tag/v0.6.5">0.6.5 更新说明</a>
+  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/download/v0.6.5/7DaysToWasteland-Windows-x64.zip"><img height="38" src="https://img.shields.io/badge/Windows%20x64-ZIP-1667A3?style=for-the-badge&amp;labelColor=174D73" alt="下载 Windows x64 压缩包"></a>
+  &nbsp;
+  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/download/v0.6.5/7DaysToWasteland.apk"><img height="38" src="https://img.shields.io/badge/Android-APK-28744D?style=for-the-badge&amp;labelColor=20573C" alt="下载安卓 APK"></a>
 </p>
+<p align="center"><a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/tag/v0.6.5">查看 0.6.5 更新说明</a></p>
 
 <p align="center"><img src="docs/screenshots/oak.webp" width="848" alt="荒原中的橡树，游戏实机动图"></p>
 
@@ -41,16 +49,14 @@
 
 **留意生物的动作。** 晨昏能看到鹿群下水饮水，夜间有灰狼追猎。感染者的衣着、装备和肢体残缺程度各不相同，腿部重损的个体会伏地拖行。喜欢收集的玩家还可以翻图鉴、解锁隐藏成就，把猫耳、充气锤或咸鱼拖鞋带回营地。
 
-| 五种树苗的生长过程 | 安卓触屏实机 |
-| :---: | :---: |
-| ![五种树苗从幼苗到成树的对照图](docs/screenshots/saplings.png) | ![带虚拟摇杆和动作键的安卓游戏画面](docs/screenshots/mobile.png) |
-
 ## 安装与联机
 
 - **Windows x64**　下载页首的 ZIP，解压后运行 `7DaysToWasteland.exe`。需要兼容渲染时，运行同目录的 `Start-Compatibility.cmd`。
 - **Android**　安装 APK 后横屏游玩，需要 Android 7.0 或更高版本并支持 OpenGL ES 3.0。双点移动摇杆，第二次向前推住即可疾跑。触控大小和左右手布局可在「系统设置 → 操控」调整。
 - **双人局域网**　两台设备连接同一局域网并使用相同版本。房主在单人存档的暂停菜单里开放世界，队友从「附近的世界」加入，也可以手动输入局域网地址。进度由房主存回原存档，下次可以单人继续。
 - **从源码运行**　用 Godot 4.6.3 标准版导入根目录的 `project.godot`，按 **F5** 启动。物品、配方与委托在 [data](data)，游戏逻辑在 [game](game)，回归检查在 [tools](tools)。
+
+<p align="center"><img src="docs/screenshots/mobile.png" width="720" alt="安卓触屏实机，左侧为移动摇杆，右侧为动作键"></p>
 
 ## 开源许可
 
