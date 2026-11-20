@@ -19,6 +19,8 @@ class Measurements:
 	var total_mass: float
 	var left_support_load_n: float
 	var right_support_load_n: float
+	var left_sole_touching: bool
+	var right_sole_touching: bool
 	var nonfoot_ground_contact: bool
 	var body_angular_velocities: Dictionary[StringName, Vector3] = {}
 	var body_linear_velocities: Dictionary[StringName, Vector3] = {}
@@ -27,6 +29,8 @@ class Measurements:
 	var fallen: bool
 	var left_support_points: PackedVector3Array
 	var right_support_points: PackedVector3Array
+	var left_support_point_loads_n: PackedFloat32Array
+	var right_support_point_loads_n: PackedFloat32Array
 	var body_poses: Dictionary[StringName, Transform3D] = {}
 
 var _frame: Measurements
@@ -67,6 +71,10 @@ var left_support_load_n: float:
 	get: return _frame.left_support_load_n
 var right_support_load_n: float:
 	get: return _frame.right_support_load_n
+var left_sole_touching: bool:
+	get: return _frame.left_sole_touching
+var right_sole_touching: bool:
+	get: return _frame.right_sole_touching
 var nonfoot_ground_contact: bool:
 	get: return _frame.nonfoot_ground_contact
 ## SupportFoot bit mask based on confirmed sole contacts from the physics solver.
@@ -85,6 +93,11 @@ var left_support_points: PackedVector3Array:
 	get: return _frame.left_support_points.duplicate()
 var right_support_points: PackedVector3Array:
 	get: return _frame.right_support_points.duplicate()
+## Vertical loads in newtons, in the same order as the corresponding points.
+var left_support_point_loads_n: PackedFloat32Array:
+	get: return _frame.left_support_point_loads_n.duplicate()
+var right_support_point_loads_n: PackedFloat32Array:
+	get: return _frame.right_support_point_loads_n.duplicate()
 ## Read-only value transforms for one-way visual sync. Contains no physics objects.
 var body_poses: Dictionary[StringName, Transform3D]:
 	get: return _frame.body_poses

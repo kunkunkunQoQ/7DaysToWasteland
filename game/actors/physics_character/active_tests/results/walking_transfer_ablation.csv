@@ -1,0 +1,6 @@
+variant,samples,first_failure_tick,fall_events,segment1_progress_m,verified_drive_switches,physical_steps_left,physical_steps_right,drive_phase_frames,test_pass
+intact,900,212,2,2.79838919639587,0,0,0,"{""transfer"":600}",False
+no_arm_targets,900,225,1,0.126052811741829,1,1,2,"{""load"":16,""swing"":14,""transfer"":570}",False
+no_loaded_knee_reference,900,247,1,0.344540953636169,1,0,1,"{""load"":13,""swing"":14,""transfer"":573}",False
+no_pressure_move,900,209,1,-0.192031487822533,0,0,0,"{""transfer"":600}",False
+no_swing_rate,900,212,2,2.79838919639587,0,0,0,"{""transfer"":600}",False

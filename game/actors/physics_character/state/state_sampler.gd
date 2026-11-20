@@ -43,6 +43,8 @@ func sample(rig: Rig, config: Config, tick_index: int, delta: float) -> State:
 			frame.angular_momentum += inverse_inertia.inverse() * frame.body_angular_velocities[id]
 	frame.left_support_load_n = rig.bodies[&"foot_l"].sole_load_n
 	frame.right_support_load_n = rig.bodies[&"foot_r"].sole_load_n
+	frame.left_sole_touching = rig.bodies[&"foot_l"].sole_touching
+	frame.right_sole_touching = rig.bodies[&"foot_r"].sole_touching
 	var pelvis: RigidBody3D = rig.bodies[&"pelvis"]
 	frame.angular_velocity = pelvis.angular_velocity
 	frame.left_sole_position = frame.body_poses[&"foot_l"] * config.sole_offset
@@ -51,6 +53,8 @@ func sample(rig: Rig, config: Config, tick_index: int, delta: float) -> State:
 
 	frame.left_support_points = rig.get_support_contacts(&"foot_l")
 	frame.right_support_points = rig.get_support_contacts(&"foot_r")
+	frame.left_support_point_loads_n = rig.bodies[&"foot_l"].sole_point_loads_n
+	frame.right_support_point_loads_n = rig.bodies[&"foot_r"].sole_point_loads_n
 	if not frame.left_support_points.is_empty():
 		frame.support_feet |= State.SupportFoot.LEFT
 	if not frame.right_support_points.is_empty():

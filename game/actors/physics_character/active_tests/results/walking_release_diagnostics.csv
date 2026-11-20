@@ -1,0 +1,9 @@
+case,release_tick,release_reason,pre_release_frames,post_release_frames,pre_release_max_anchor_m,post_release_max_anchor_m,first_anchor_over_20cm_tick,pre_release_anchor_over_20cm_frames,post_release_anchor_over_20cm_frames,anchor_over_20cm_frames,post_release_peak_torque_nm,peak_anchor_joint,peak_anchor_tick,historical_test_pass
+forward,460,anchor_spine,459,441,0.02877064980567,4.36854791641235,460,0,102,102,0.0,hand_l,507,False
+backward,283,anchor_foot_l,282,618,0.00940012186766,0.12898887693882,-1,0,0,0,0.0,foot_l,283,False
+left,255,tilted_without_support,254,646,0.01967090927064,0.03532786667347,-1,0,0,0,0.0,hand_l,271,False
+right,282,tilted_without_support,281,619,0.04537410289049,0.0420115403831,-1,0,0,0,0.0,foot_r,263,False
+turn_left,391,anchor_foot_r,390,510,0.04949682950974,0.33910113573074,425,0,1,1,0.0,hand_r,425,False
+turn_right,385,anchor_foot_r,384,516,0.02670578658581,0.41986960172653,386,0,21,21,0.0,foot_r,393,False
+slow,634,anchor_foot_l,633,267,0.01790796220303,0.1537656635046,-1,0,0,0,0.0,foot_l,634,False
+uneven,437,tilted_without_support,436,464,0.03045283071697,0.32043844461441,463,0,1,1,0.0,hand_l,463,False

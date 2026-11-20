@@ -12,14 +12,18 @@ var jump_pressed: bool:
 	get: return _jump
 var grab_held: bool:
 	get: return _grab
+var run_held: bool:
+	get: return _run
 
 var _velocity: Vector3
 var _facing: Vector3
 var _jump: bool
 var _grab: bool
+var _run: bool
 
-func _init(velocity: Vector3, facing: Vector3, jump: bool, grab: bool) -> void:
+func _init(velocity: Vector3, facing: Vector3, jump: bool, grab: bool, run := false) -> void:
 	_velocity = velocity
 	_facing = facing
 	_jump = jump
 	_grab = grab
+	_run = run

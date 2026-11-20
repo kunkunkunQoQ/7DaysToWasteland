@@ -2,6 +2,7 @@ extends SceneTree
 ## One reproducible 60 Hz trial. Use run_standing.py for visual pairs and control.
 
 const SCENE := "res://game/actors/physics_character/active_character.tscn"
+const ContactProbe := preload("standing_contact_probe.gd")
 const HZ := 60
 const FRAMES := 60 * HZ
 const IMPACT_FRAME := 10 * HZ
@@ -13,6 +14,7 @@ var _scenario := "quiet"
 var _mode := "active"
 var _visual := "on"
 var _directory := ""
+var _solver_iterations := 16
 var _out_trace := false
 var _actor: Node3D
 var _chest: RigidBody3D
@@ -23,6 +25,7 @@ var _initial_com: Vector3
 var _initial_left: Vector3
 var _initial_right: Vector3
 var _initial_poses: Dictionary
+var _previous_poses: Dictionary
 var _trace: FileAccess
 var _hash := HashingContext.new()
 var _joint_stats := {}
@@ -46,6 +49,8 @@ var _worst_slip := Vector2.ZERO
 var _com_sq := 0.0
 var _tilt_sq := 0.0
 var _max_torque := 0.0
+var _contacts := ContactProbe.new()
+var _prev_com_vy := 0.0
 
 func _initialize() -> void:
 	Engine.physics_ticks_per_second = HZ
@@ -58,6 +63,8 @@ func _initialize() -> void:
 			_visual = arg.trim_prefix("--visual=")
 		elif arg.begins_with("--out="):
 			_directory = arg.trim_prefix("--out=")
+		elif arg.begins_with("--solver-iterations="):
+			_solver_iterations = arg.trim_prefix("--solver-iterations=").to_int()
 		elif arg == "--trace":
 			_out_trace = true
 		else:
@@ -65,6 +72,9 @@ func _initialize() -> void:
 			return
 	if _scenario not in DIRECTIONS or _mode not in ["active", "passive"] or _visual not in ["on", "off"]:
 		_abort("Expected --case=quiet|front|back|left|right --mode=active|passive --visual=on|off.")
+		return
+	if _solver_iterations not in [16, 32, 64, 128]:
+		_abort("Expected 16, 32, 64 or 128 private-space solver iterations.")
 		return
 	if not _directory.is_absolute_path() or DirAccess.make_dir_recursive_absolute(_directory) != OK:
 		_abort("An absolute, writable --out=<directory> is required.")
@@ -78,6 +88,11 @@ func _abort(message: String) -> void:
 func _start() -> void:
 	if root.world_3d.direct_space_state.get_class() != &"GodotPhysicsDirectSpaceState3D":
 		_abort("GodotPhysics3D is required.")
+		return
+	var parameter := PhysicsServer3D.SPACE_PARAM_SOLVER_ITERATIONS
+	PhysicsServer3D.space_set_param(root.world_3d.space, parameter, _solver_iterations)
+	if roundi(PhysicsServer3D.space_get_param(root.world_3d.space, parameter)) != _solver_iterations:
+		_abort("The physics space did not apply the requested solver setting.")
 		return
 	var packed := load(SCENE) as PackedScene
 	if packed == null:
@@ -110,12 +125,15 @@ func _start() -> void:
 		return
 	var total_mass := 0.0
 	for body: RigidBody3D in rig.bodies.values():
-		if body.freeze or body.axis_lock_linear_x or body.axis_lock_linear_y or body.axis_lock_linear_z:
-			_abort("A physical segment is frozen or translation-locked.")
+		if body.freeze or body.axis_lock_linear_x or body.axis_lock_linear_y or body.axis_lock_linear_z or body.axis_lock_angular_x or body.axis_lock_angular_y or body.axis_lock_angular_z:
+			_abort("A physical segment is frozen or has a locked rigid-body axis.")
 			return
 		total_mass += body.mass
 	_weight_n = total_mass * float(ProjectSettings.get_setting("physics/3d/default_gravity"))
+	_contacts.setup(rig, ground, _actor.get("config"), total_mass)
+	_prev_com_vy = state.linear_velocity.y
 	_initial_poses = state.body_poses
+	_previous_poses = state.body_poses
 	_initial_com = state.center_of_mass
 	_initial_left = state.left_sole_position
 	_initial_right = state.right_sole_position
@@ -129,12 +147,14 @@ func _start() -> void:
 			return
 		_trace.store_csv_line(["tick", "measured_frame", "com_x", "com_y", "com_z", "pelvis_y", "chest_tilt_deg",
 			"com_drift_m", "left_sole_slip_m", "right_sole_slip_m", "left_sole_load_n",
-			"right_sole_load_n", "support_mask", "nonfoot_ground_contact", "fallen", "max_torque_nm"])
+			"right_sole_load_n", "support_mask", "nonfoot_ground_contact", "fallen", "max_torque_nm",
+			"left_loaded_contact_speed_m_s", "right_loaded_contact_speed_m_s"])
 	_hash.start(HashingContext.HASH_SHA256)
 	_actor.connect("state_updated", _observe)
 
 func _path(suffix: String) -> String:
-	return _directory.path_join("%s_%s_%s_%s" % [_mode, _scenario, _visual, suffix])
+	var solver := "" if _solver_iterations == 16 else "_iter%d" % _solver_iterations
+	return _directory.path_join("%s_%s_%s%s_%s" % [_mode, _scenario, _visual, solver, suffix])
 
 func _flag(tick: int, reason: String) -> void:
 	if _first_bad < 0:
@@ -227,8 +247,10 @@ func _observe(state) -> void:
 		_flag(tick, "posture_or_nonfoot_support")
 	if drift > 0.15 or slip.x > 0.10 or slip.y > 0.10:
 		_flag(tick, "com_or_foot_drift")
+	var contact_speeds := Vector2.ZERO
 	if recording:
 		_samples += 1
+		contact_speeds = _contacts.sample(state, _previous_poses, _prev_com_vy)
 		_sum_load_n += left + right
 		_com_sq += drift * drift
 		_tilt_sq += tilt * tilt
@@ -241,10 +263,12 @@ func _observe(state) -> void:
 			# Instrumented external strike; no changes to velocity or pose.
 			_chest.apply_central_impulse(DIRECTIONS[_scenario] * IMPULSE_NS)
 			_impacts += 1
+	_prev_com_vy = state.linear_velocity.y
+	_previous_poses = state.body_poses
 	if _trace != null:
 		_trace.store_csv_line(PackedStringArray([str(tick), str(_samples), str(com.x), str(com.y), str(com.z), str(pelvis_y),
 			str(tilt), str(drift), str(slip.x), str(slip.y), str(left), str(right), str(state.support_feet),
-			str(state.nonfoot_ground_contact), str(state.fallen), str(frame_torque)]))
+			str(state.nonfoot_ground_contact), str(state.fallen), str(frame_torque), str(contact_speeds.x), str(contact_speeds.y)]))
 	if _samples == FRAMES:
 		_actor.disconnect("state_updated", _observe)
 		_finish.call_deferred()
@@ -262,7 +286,7 @@ func _finish() -> void:
 				_flag(_prev_tick, "missing_stance_actuator")
 	var stood := _first_bad < 0
 	var passed := stood if _mode == "active" else not stood and _fallen > 0 and _max_torque == 0.0 and _invalid == 0 and _torque_invalid == 0
-	var summary := {"mode":_mode, "case":_scenario, "visual":_visual, "hz":HZ, "samples":_samples,
+	var summary := {"mode":_mode, "case":_scenario, "visual":_visual, "hz":HZ, "solver_iterations":_solver_iterations, "samples":_samples,
 		"first_measured_tick":_start_tick, "first_failed_tick":_first_bad, "first_failure":_first_reason,
 		"posture_pass":stood, "test_pass":passed, "direction":str(DIRECTIONS[_scenario]), "external_impulses":_impacts,
 		"impulse_ns":IMPULSE_NS if _impacts else 0.0, "com_drift_peak_m":_worst_com,
@@ -273,6 +297,7 @@ func _finish() -> void:
 		"support_impulse_over_weight_impulse":load_fraction, "nonfoot_contact_frames":_nonfoot,
 		"fallen_frames":_fallen, "peak_torque_nm":_max_torque, "invalid_samples":_invalid,
 		"invalid_torque_samples":_torque_invalid, "physics_sha256":_hash.finish().hex_encode()}
+	summary.merge(_contacts.summary(_weight_n * FRAMES / HZ))
 	var file := FileAccess.open(_path("summary.json"), FileAccess.WRITE)
 	var joints := FileAccess.open(_path("joints.csv"), FileAccess.WRITE)
 	if file == null or joints == null:

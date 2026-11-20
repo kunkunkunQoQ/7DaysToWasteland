@@ -14,7 +14,7 @@ var _prediction: Speculative
 func _ready() -> void:
 	set_physics_process(_viscosity != null or _prediction != null)
 
-func build(config: Config) -> void:
+func build(config: Config, initial_poses: Dictionary = {}) -> void:
 	if not bodies.is_empty():
 		return
 	var surface := PhysicsMaterial.new()
@@ -68,6 +68,15 @@ func build(config: Config) -> void:
 			limited.set_param_y(Generic6DOFJoint3D.PARAM_ANGULAR_FORCE_LIMIT, stop_torque)
 			limited.set_param_z(Generic6DOFJoint3D.PARAM_ANGULAR_FORCE_LIMIT, stop_torque)
 		joints[row.child] = joint
+	# The native joints acquired their independent anatomical reference frames
+	# above. Assemble the requested spawn pose once, before the first solve.
+	if not initial_poses.is_empty():
+		if initial_poses.size() != bodies.size() or not initial_poses.has_all(bodies.keys()):
+			push_error("Incomplete initial articulated pose.")
+			return
+		for id: StringName in bodies:
+			bodies[id].transform = initial_poses[id]
+			bodies[id].force_update_transform()
 	if config.passive_joint_drag > 0 or config.dry_joint_friction_nm > 0:
 		_viscosity = Viscosity.new()
 		_viscosity.setup(config, bodies)

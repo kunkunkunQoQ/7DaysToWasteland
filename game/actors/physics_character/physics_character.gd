@@ -24,10 +24,13 @@ func _ready() -> void:
 		push_error("PhysicsCharacter requires a body configuration.")
 		set_physics_process(false)
 		return
-	_rig.build(config)
+	_rig.build(config, _initial_segment_poses())
 	configured.emit(config)
 	_state = _sampler.sample(_rig, config, 0, 0.0)
 	state_updated.emit(_state)
+
+func _initial_segment_poses() -> Dictionary:
+	return {}
 
 func _physics_process(delta: float) -> void:
 	_tick += 1
@@ -40,5 +43,5 @@ func get_state() -> State:
 
 ## Facing is independent of travel direction. Jump is latched until the next
 ## physics tick. This interface accepts intent even while the rig is passive.
-func submit_intent(velocity: Vector3, facing: Vector3, jump_pressed := false, grab_held := false) -> void:
-	_controller.submit(velocity, facing, jump_pressed, grab_held)
+func submit_intent(velocity: Vector3, facing: Vector3, jump_pressed := false, grab_held := false, run_held := false) -> void:
+	_controller.submit(velocity, facing, jump_pressed, grab_held, run_held)

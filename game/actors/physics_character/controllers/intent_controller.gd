@@ -11,8 +11,9 @@ var _velocity := Vector3.ZERO
 var _facing := Vector3.FORWARD
 var _jump_pending := false
 var _grab_held := false
+var _run_held := false
 
-func submit(velocity: Vector3, facing: Vector3, jump: bool, grab: bool) -> void:
+func submit(velocity: Vector3, facing: Vector3, jump: bool, grab: bool, run := false) -> void:
 	if velocity.is_finite():
 		_velocity = velocity
 	var horizontal := Vector3(facing.x, 0.0, facing.z)
@@ -20,8 +21,9 @@ func submit(velocity: Vector3, facing: Vector3, jump: bool, grab: bool) -> void:
 		_facing = horizontal.normalized()
 	_jump_pending = _jump_pending or jump
 	_grab_held = grab
+	_run_held = run
 
 func advance(state: State, delta: float) -> void:
-	var intent := Intent.new(_velocity, _facing, _jump_pending, _grab_held)
+	var intent := Intent.new(_velocity, _facing, _jump_pending, _grab_held, _run_held)
 	_jump_pending = false
 	control_step.emit(state, intent, delta)

@@ -12,6 +12,9 @@ var pressure_target := Vector3.ZERO
 var desired_acceleration := Vector3.ZERO
 var _mass := 0.0
 var _gravity := 18.0
+const STANCE_BEND := 0.4363323129985824 # 25 degrees at each hip in radians
+var _stance_center := Vector3.INF
+var _stance_height := 0.0
 var _rows: Array[Dictionary] = []
 var _segments: Array[Dictionary] = []
 var _pivot_from_parent := {}
@@ -21,11 +24,36 @@ var _masses := {}
 var _parent := {}
 var _rest := {}
 
+## Forward kinematics used only for the initialization of an active character.
+## Angles refer to the body's local X axis; hip and ankle rotate by bend and
+## the hinge knee by -2*bend, preserving the neutral foot orientation.
+static func spawn_pose(config: Config, bend: float = STANCE_BEND) -> Dictionary:
+	var centers := {}
+	for row in config.build_segments():
+		centers[row.id] = row.position
+	var poses := {&"pelvis": Transform3D(Basis.IDENTITY, centers[&"pelvis"])}
+	for joint in config.build_joints():
+		var pivot: Vector3 = poses[joint.parent] * (joint.position - centers[joint.parent])
+		var orientation := Basis.IDENTITY
+		if joint.child in [&"thigh_l", &"thigh_r"]:
+			orientation = Basis(Vector3.RIGHT, bend)
+		elif joint.child in [&"calf_l", &"calf_r"]:
+			orientation = Basis(Vector3.RIGHT, -bend)
+		poses[joint.child] = Transform3D(orientation, pivot + orientation * (centers[joint.child] - joint.position))
+	var floor_offset: Vector3 = centers[&"foot_l"] - poses[&"foot_l"].origin
+	for id: StringName in poses:
+		var pose: Transform3D = poses[id]
+		pose.origin += floor_offset
+		poses[id] = pose
+	return poses
+
 func setup(config: Config) -> void:
 	_rows = config.build_joints()
 	_segments = config.build_segments()
 	_gravity = float(ProjectSettings.get_setting("physics/3d/default_gravity"))
 	_mass = 0.0
+	_stance_center = Vector3.INF
+	_stance_height = 0.0
 	_neutral_com_offset = Vector3.ZERO
 	for row in _segments:
 		_rest[row.id] = row.position
@@ -52,7 +80,9 @@ func plan(state: State, facing: Vector3, _delta: float) -> void:
 	var left := state.left_sole_position
 	var right := state.right_sole_position
 	var center := (left + right) * 0.5
-	var displacement := (state.center_of_mass - center - heading * _neutral_com_offset).slide(Vector3.UP)
+	if not _stance_center.is_finite():
+		_stance_center = center
+	var displacement := (state.center_of_mass - _stance_center - heading * _neutral_com_offset).slide(Vector3.UP)
 	var velocity := state.linear_velocity.slide(Vector3.UP)
 	desired_acceleration = (-5.0 * displacement - 4.0 * velocity).limit_length(3.0)
 	var height := maxf(0.25, state.center_of_mass.y - center.y)
@@ -66,7 +96,10 @@ func plan(state: State, facing: Vector3, _delta: float) -> void:
 	elif state.support_feet == State.SupportFoot.LEFT:
 		weight_left = 1.0
 	var weight_right := 1.0 - weight_left if state.grounded else 0.0
-	var load := (Vector3.UP * _gravity + desired_acceleration) * _mass
+	if _stance_height == 0.0:
+		_stance_height = height
+	var vertical := clampf((_stance_height - height) * 100.0 - state.linear_velocity.y * 16.0, -8.0, 18.0)
+	var load := (Vector3.UP * (_gravity + vertical) + desired_acceleration) * _mass
 	var contact_center := left * weight_left + right * weight_right
 	var trim := pressure_target - contact_center
 	var support_offset := lateral * clampf(trim.dot(lateral), -0.7 * _foot_half.x, 0.7 * _foot_half.x)
@@ -98,9 +131,9 @@ func plan(state: State, facing: Vector3, _delta: float) -> void:
 	var torso_moment := chest.y.cross(Vector3.UP) * 150.0 - Vector3(state.body_angular_velocities[&"chest"]).slide(Vector3.UP) * 20.0
 	feedforward_world_nm[&"thigh_l"] -= torso_moment * weight_left
 	feedforward_world_nm[&"thigh_r"] -= torso_moment * weight_right
-	# Mild flexion keeps both knees away from their extension stop. Changes in
-	# vertical velocity provide compliance during small bumps.
-	var flex := clampf(0.045 - state.linear_velocity.y * 0.025, 0.018, 0.11)
+	# Preserve extension leverage under gravity. Measured changes in COM
+	# height and vertical speed alter hip, knee and ankle support moments.
+	var flex := STANCE_BEND
 	for side in ["_l", "_r"]:
 		relative_targets["thigh"+side] = Basis(Vector3.RIGHT, flex)
 		relative_targets["calf"+side] = Basis(Vector3.RIGHT, -2.0 * flex)

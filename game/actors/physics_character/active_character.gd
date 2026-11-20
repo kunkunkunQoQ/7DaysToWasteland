@@ -6,8 +6,12 @@ const Muscles := preload("controllers/joint_muscle_controller.gd")
 const IntentFrame := preload("controllers/physics_character_intent.gd")
 
 @export var active_standing := true
+@export_range(0.0, 45.0, 0.5) var initial_hip_flexion_degrees := 25.0
 var _standing := Standing.new()
 var _muscles := Muscles.new()
+
+func _initial_segment_poses() -> Dictionary:
+	return Standing.spawn_pose(config, deg_to_rad(initial_hip_flexion_degrees))
 
 func _ready() -> void:
 	super._ready()

@@ -14,15 +14,35 @@
 | 肌肉 | 15 个关节每帧提供实际施加的有限世界力矩和正的有限力矩上限。记录每关节峰值、RMS、最小/最大上限及达到上限 99% 的帧数。脊柱和双髋、膝、踝在观察期间均需产生力矩。 |
 | 物理时钟与对照 | 每帧严格前进一个 1/60 s 物理步。五组视觉开关试验对逐步身体姿态、支撑载荷、肌力矩等数据的 SHA-256 必须一致。负对照要求出现实际跌倒且主动肌力矩为零。 |
 
-上述数值为本项目对站立的工程判据。夹具始终检查整个时窗，首次失败物理步、原因及最终极值都写入摘要。测试只读取角色公开状态和诊断力矩，额外探查刚体数、关节数与锁定配置，并在匹配的物理步向胸部施加试验冲量。
+上述数值为本项目对站立的工程判据。夹具始终检查整个时窗，首次失败物理步、原因及最终极值都写入摘要。试验从角色状态和诊断力矩取样，同时核查刚体、关节数及刚体轴锁定，并在匹配的物理步向胸部施加试验冲量。
+
+**足底接触的独立测量。** 原生探针遍历地板与各段的接触，分别累计全身体地接触、非足段接触和合格足底接触的竖直冲量。对每个承重接触，把流形见证点转入上一步的脚掌局部坐标，随后用本步姿态重新投回世界，按切向位移除以步长计算固定材料点的实际平均滑速。每步按触点竖直冲量加权，输出 RMS 与逐步累计滑动路程。另列求解后刚体线速度加 ω×r 得到的切向速率、引擎在接触预处理时缓存的瞬时速率。三者各有独立字段。没有观测到有效接触时该脚的 RMS 标为 −1。[4.6.3 原生接触生成及上报时序](https://github.com/godotengine/godot/blob/4.6.3-stable/modules/godot_physics_3d/godot_body_pair_3d.cpp#L379-L405)
+
+摘要还记录全部原生地面冲量减去重力冲量及 COM 竖直动量变化的余量。引擎离散积分、线阻尼、接触上报上限和取样时序均可能贡献余量。足底材料点累计滑动、足底标志点相对出生位的最大水平漂移分别给出。
 
 ## 运行
 
 在项目根目录运行。单进程入口可单独复测一种工况。矩阵启动器只使用 Python 标准库。
 
 ```powershell
-godot --headless --path . --fixed-fps 60 --script res://game/actors/physics_character/active_tests/verify_standing.gd -- --case=front --mode=active --visual=off --out=C:/Temp/standing-one --trace
-python game/actors/physics_character/active_tests/run_standing.py --godot C:/Godot/Godot_console.exe --out C:/Temp/standing-full --jobs 3
+godot --headless --path . --fixed-fps 60 --script res://game/actors/physics_character/active_tests/verify_standing.gd -- --case=front --mode=active --visual=off --solver-iterations=128 --out=C:/Temp/standing-one --trace
+python game/actors/physics_character/active_tests/run_standing.py --godot C:/Godot/Godot_console.exe --out C:/Temp/standing-full --solver-iterations 128 --jobs 3
 ```
 
-每个工况写出 JSON 摘要和 15 个关节的 CSV。加 `--trace` 可导出逐步身高、胸倾、水平漂移、支撑载荷与最大力矩。矩阵额外生成 `standing_body.csv`、`standing_joints.csv` 与 `visual_pairs.csv`。所有工况和视觉一致性门槛均通过时返回 0，物理失败返回 1。Godot 单次运行的参数或载入错误返回 2。
+每个工况写出 JSON 摘要和 15 个关节的 CSV。加 `--trace` 可导出逐步身高、胸倾、水平漂移、承重触点切向滑速、支撑载荷与最大力矩。矩阵额外生成 `standing_body.csv`、`standing_joints.csv` 与 `visual_pairs.csv`。两个入口都接受 `--solver-iterations=16`、32、64 或 128，在专用进程的物理空间单独变更求解迭代数，60 Hz 保持固定。默认 16 次；其它组文件名包含迭代数。所有工况和视觉一致性门槛均通过时返回 0，物理失败返回 1。Godot 单次运行的参数或载入错误返回 2。
+
+可在编辑器打开 [standing_arena.tscn](standing_arena.tscn) 并按 F6，观察姿态和遥测。空格将测试块推向人体，R 重置。独立场景退出时恢复原频率和迭代数。
+
+## 阶段 3 实测归档
+
+Godot 4.6.3、GodotPhysics3D、固定 60 Hz。在原始盒形足底和四个 32 mm 接触垫两组中，空间求解迭代 16 次，均为 1/11 通过。通过的都是被动跌倒对照。四接触垫在 16、32、64 次下，安静站立首次违反判据分别发生在第 55、175、1663 个物理步。128 次时全部 11/11 工况通过，5/5 视觉开关逐步哈希一致。
+
+| 128 次迭代工况 | 最大 COM 漂移 m | 最大胸倾 ° | 左/右足最大漂移 m | 左/右受载足底材料点滑速 RMS m/s | 足底冲量/体重冲量 |
+|---|---:|---:|---|---|---:|
+| 安静 | 0.0272 | 13.71 | 0.0128 / 0.0398 | 0.0142 / 0.0205 | 0.9964 |
+| 前侧受推 | 0.0317 | 13.71 | 0.0129 / 0.0451 | 0.0140 / 0.0209 | 0.9964 |
+| 后侧受推 | 0.0278 | 13.71 | 0.0114 / 0.0492 | 0.0137 / 0.0209 | 0.9965 |
+| 左侧受推 | 0.0274 | 13.71 | 0.0130 / 0.0474 | 0.0138 / 0.0208 | 0.9964 |
+| 右侧受推 | 0.0272 | 13.71 | 0.0114 / 0.0404 | 0.0141 / 0.0195 | 0.9964 |
+
+每项主动试验连续记录 3,600 步，最大实际关节力矩 135.36 N·m。使用以下归档可以核对全部 33 个试验、495 条逐关节记录和 15 组视觉开关数据。[全身 CSV](results/standing_body.csv) · [力矩 CSV](results/standing_joints.csv) · [视觉比对](results/visual_pairs.csv) · [通过版源文件哈希](results/standing_source_hashes.csv)
