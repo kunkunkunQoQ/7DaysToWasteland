@@ -2,9 +2,21 @@
 
 《七日荒原》（7 Days to Wasteland）是一款可单人或两人局域网协作通关的开放世界生存游戏。每个新世界都会在远离建筑的干燥缓坡或平地上随机选一个安全落脚点。七位幸存者只穿基础内衣裤，背包和快捷栏全空。捡落枝和碎石、打草拾纤维做出第一把石斧，在当地公告板接委托，建营地，守过第七夜。找到信标记录并带回驻地后进入结局，随后可继续探索和建设。
 
-## 启动
+![橡树实机动图](docs/screenshots/oak.webp)
 
-在 GitHub 下载成品请打开 [0.6.5 发行页](https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/tag/v0.6.5)，选择 Windows x64 压缩包或安卓 APK。
+[下载 Windows 或 Android 版](https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/tag/v0.6.5)
+
+## 游戏截图
+
+| 峡谷水岸 | 安卓触屏求生 |
+| --- | --- |
+| ![峡谷水岸](docs/screenshots/canyon.png) | ![安卓触屏求生](docs/screenshots/mobile.png) |
+
+| 医院墙体拆除过程 | 五种树苗的生长过程 |
+| --- | --- |
+| ![医院拆墙实机](docs/screenshots/hospital.jpg) | ![五种树苗生长对照](docs/screenshots/saplings.png) |
+
+## 启动
 
 - Windows x64 版解压 `build/七日荒原-0.6.5-Windows-x64.zip` 后，双击 `7DaysToWasteland.exe` 启动。在工程目录里也可直接运行 `build/Windows x64/7DaysToWasteland.exe`。
 - 安卓 0.6.5 安装包位于 `build/Android/七日荒原-0.6.5.apk`，支持 Android 7.0 及以上、OpenGL ES 3.0。安装后横屏打开「七日荒原」，可单人开局或从「局域网协作」加入同版本队伍。
