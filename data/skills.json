@@ -1,0 +1,11 @@
+{
+  "craft": {"name":"荒原工艺","branch":"制造","unlock":2,"max":3,"info":"解锁工作台、复合工艺、化学与高级载具。每级缩短 9% 制造时间。"},
+  "engineering": {"name":"配电与机务","branch":"制造","unlock":4,"max":3,"requires":["craft",1],"info":"解锁发电与照明、自动陷阱和机枪塔。"},
+  "medicine": {"name":"应急医学","branch":"制造","unlock":3,"max":3,"info":"解锁抗生素配方。每级提升 15% 治疗回复。"},
+  "harvest": {"name":"荒野采集","branch":"采集","unlock":2,"max":3,"info":"每级提高采集量，解锁钢斧并提高作物产出。"},
+  "scavenger": {"name":"拾遗者","branch":"采集","unlock":3,"max":3,"requires":["harvest",1],"info":"每级增加搜刮丰度 15%，缩短搜刮时间 12%。"},
+  "melee": {"name":"近战技艺","branch":"近战","unlock":2,"max":3,"info":"每级增加近战伤害 17%，解锁救援锤。"},
+  "firearms": {"name":"射击训练","branch":"枪械","unlock":2,"max":3,"info":"提高射击伤害与装填速度，解锁枪械组装。"},
+  "fitness": {"name":"长途跋涉","branch":"体能","unlock":2,"max":3,"info":"每级增加 12 点耐力上限并加快恢复。"},
+  "hardiness": {"name":"御寒体质","branch":"体能","unlock":4,"max":3,"requires":["fitness",1],"info":"每级减缓低温影响，并提高饱食与水分效率。"}
+}

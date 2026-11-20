@@ -1,0 +1,22 @@
+{
+  "seed_stock": {"name":"留种周转箱","time":1.2,"draws":4,"items":[["seed_corn",13,2,5,0],["corn",8,2,4,0],["potato",8,2,5,0],["fiber",5,2,4,0],["cloth",4,1,3,0]]},
+  "garage_spares": {"name":"机修备件箱","time":1.7,"draws":4,"items":[["parts",12,3,6,0],["oil",9,1,3,0],["wire",7,2,5,0],["brass",6,2,4,0],["scrap",8,3,6,0],["salvage_wrench",2,1,1,0]]},
+  "mailbag": {"name":"山线待投包裹箱","time":1.2,"draws":4,"items":[["cloth",8,2,4,0],["tape",8,1,4,0],["bandage",6,2,4,0],["clean_water",5,1,2,0],["canned",6,1,2,0],["work_gloves",3,1,1,0]]},
+  "alpine_cache": {"name":"雪山救援箱","time":1.5,"draws":4,"items":[["bandage",11,2,4,0],["splint",8,1,2,0],["coat",5,1,1,0],["alpine_cap",4,1,1,0],["canned",5,1,2,0],["clean_water",4,1,2,0],["medkit",2,1,1,0]]},
+  "desert_cache": {"name":"沙漠蓄水箱","time":1.3,"draws":4,"items":[["clean_water",19,2,4,0],["sun_cape",2,1,1,0],["mineral",3,1,2,0],["cloth",4,1,3,0],["reed_stem",3,2,4,0],["canned",2,1,1,0]]},
+  "shore_cache": {"name":"湖岸浮箱","time":1.2,"draws":3,"items":[["clean_water",9,1,2,0],["cloth",5,1,3,0],["fiber",8,2,4,0],["canned",4,1,1,0],["reed_stem",3,2,4,0]]},
+  "forest_cache": {"name":"林场板条箱","time":1.4,"draws":3,"items":[["honey",4,1,2,0],["wood",9,4,8,0],["leather",7,1,3,0],["berries",6,2,5,0],["arrow",3,3,7,0],["field_sickle",2,1,1,0],["work_gloves",2,1,1,0]]},
+  "ridge_cache": {"name":"山脊远征匣","time":1.6,"draws":3,"items":[["splint",5,1,2,0],["stone",8,3,7,0],["lead",6,2,4,0],["bandage",6,1,2,0],["iron_pick",2,1,1,0],["trail_boots",2,1,1,0]]},
+  "ash_cache": {"name":"焦土密封桶","time":1.8,"draws":3,"items":[["fuel",6,1,3,0],["mineral",9,2,5,0],["oil",6,1,2,0],["scrap",6,2,5,0]]},
+  "town_cache": {"name":"旧镇调度柜","time":1.9,"draws":3,"items":[["electronics",6,1,2,0],["wire",8,2,4,0],["parts",7,1,3,0],["tape",8,1,3,0],["baton",2,1,1,4],["salvage_wrench",2,1,1,0]]},
+  "cabin": {"name":"木质储物箱","time":1.2,"draws":4,"items":[["wood",10,8,15,0],["cloth",8,3,6,0],["canned",7,1,2,0],["clean_water",6,1,2,0],["potato",4,2,4,0],["scrap",9,4,9,0],["parts",6,2,4,0],["coat",1,1,1,0]]},
+  "kitchen": {"name":"厨房橱柜","time":2.0,"draws":5,"items":[["canned",9,1,3,0],["clean_water",7,1,3,0],["dirty_water",4,1,3,0],["potato",5,2,4,0],["corn",6,1,4,0],["seed_corn",5,1,3,0],["cloth",4,3,8,0]]},
+  "trunk": {"name":"汽车后备箱","time":2.5,"draws":5,"items":[["scrap",11,6,14,0],["parts",10,2,7,0],["wire",7,3,8,0],["fuel",6,2,7,0],["oil",7,2,6,0],["tape",5,3,6,0],["brass",5,3,8,0],["bike",1,1,1,28]]},
+  "medical": {"name":"医疗储备包","time":1.6,"draws":5,"items":[["honey",3,1,2,0],["bandage",10,1,5,0],["cloth",7,4,9,0],["splint",7,1,3,0],["antibiotic",7,1,3,0],["medkit",4,1,2,0],["mineral",7,5,10,0],["electronics",3,2,6,12]]},
+  "weapons": {"name":"巡防军火箱","time":3.5,"draws":5,"items":[["arrow",6,10,24,0],["round",11,9,21,0],["heavy_round",8,6,14,0],["pistol",5,1,1,0],["lead",7,3,8,0],["brass",6,3,8,0],["armor",2,1,1,12],["rifle",2,1,1,24]]},
+  "safe": {"name":"旧镇保险柜","time":3.5,"draws":6,"items":[["steel",7,5,12,0],["electronics",9,3,8,0],["ingot",9,5,12,0],["medkit",4,1,3,0],["pistol",3,1,1,0],["rifle",3,1,1,22],["heavy_round",5,10,23,0],["beacon_log",5,1,1,0]]},
+  "salvage": {"name":"泵站维护箱","time":1.7,"draws":5,"items":[["scrap",10,9,16,0],["parts",10,5,8,0],["wire",9,7,13,0],["brass",6,4,8,0],["electronics",6,2,5,0],["tape",3,2,5,0],["oil",6,1,6,0]]},
+  "ferry_salvage": {"name":"渡船救生匣","time":1.3,"draws":4,"items":[["bandage",8,2,4,0],["canned",7,1,2,0],["clean_water",8,1,2,0],["cloth",5,3,6,0],["splint",3,1,2,0]]},
+  "pump_salvage": {"name":"水泵备件筒","time":1.6,"draws":4,"items":[["electronics",8,2,4,0],["parts",8,4,7,0],["wire",7,4,8,0],["brass",5,3,6,0],["oil",3,1,3,0]]},
+  "bridge_salvage": {"name":"桥检工具匣","time":1.9,"draws":5,"items":[["steel",9,4,8,0],["ingot",5,2,4,0],["scrap",6,7,12,0],["tape",6,2,4,0],["parts",7,3,6,0]]}
+}

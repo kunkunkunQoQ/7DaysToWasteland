@@ -1,0 +1,12 @@
+{
+  "lodge": {"name":"南岸湖务站","color":"#756081","stories":1,"span":10,"loots":["cabin","kitchen","salvage"],"tier":1,"note":"撤离船 17:30 出发。没登船的人，沿蓝线找补给。"},
+  "fuel": {"name":"落栖加油站","color":"#a66e5e","stories":1,"span":11,"loots":["trunk","salvage","kitchen"],"tier":2,"note":"停电前最后一个油罐已标记。别在泵岛点火。"},
+  "police": {"name":"灰湾警务站","color":"#617b9e","stories":2,"span":11,"loots":["weapons","safe","medical","weapons"],"tier":3,"note":"夜班值勤记录。门封住以后，二楼平台是最后的集合点。"},
+  "bunker": {"name":"泄洪地下指挥所","color":"#5d8076","stories":2,"span":10,"loots":["salvage","weapons","safe"],"tier":3,"note":"紧急避难层对公众开放。备用电池留在最下层。"},
+  "hospital": {"name":"回声医院","color":"#b78b86","stories":3,"span":12,"loots":["medical","kitchen","medical","safe","medical"],"tier":4,"note":"发热区已转移。病历与备用药品分开存放。"},
+  "tower": {"name":"西岭观测塔残骸","color":"#81768f","stories":4,"span":10,"loots":["trunk","salvage","medical","weapons","safe"],"tier":5,"note":"雾里的红色闪光不是信号。停用近岸航标，等待人工复核。"},
+  "cabin": {"name":"松影巡林屋","color":"#8b6a5e","stories":1,"span":9,"loots":["cabin","kitchen"],"tier":1,"note":"采完种子，请留一半给来年。"},
+  "granary": {"name":"谷地种子粮站","color":"#b29762","stories":1,"span":12,"loots":["seed_stock","kitchen","cabin"],"tier":1,"note":"留种批次和口粮分仓。外筒仓已经漏雨，最后一箱干种留在室内。"},
+  "garage": {"name":"公路机修车间","color":"#637880","stories":1,"span":12,"loots":["garage_spares","salvage","trunk"],"tier":2,"note":"行车起重架报废。千斤顶和替换轴承已从工位收进备件箱。"},
+  "post": {"name":"山道巡回邮局","color":"#988074","stories":2,"span":11,"loots":["mailbag","cabin","medical"],"tier":2,"note":"一楼交寄，二楼分拣。停运那天，山线的应急包裹还没装车。"}
+}

@@ -1,0 +1,21 @@
+{
+  "deliveries": [
+    [
+      {"id":"shore_basket","name":"南岸的果篮","story":"湖务站准备晚餐。沿湖岸找浆果灌木，带回一篮熟果。","inputs":{"berries":6},"reward":{"clean_water":2,"bandage":1},"xp":38},
+      {"id":"jetty_planks","name":"修栈桥的木料","story":"码头有几块踏板松了。到林边收些木料和纤维，换走维修物资。","inputs":{"wood":18,"fiber":3},"reward":{"parts":4,"tape":2},"xp":42}
+    ],
+    [
+      {"id":"bank_clay","name":"补漏的湿泥","story":"储水池边沿在渗水，南岸浅滩的湿黏土正合用。","inputs":{"clay":10,"sand":4},"reward":{"brick":8,"clean_water":2},"xp":44},
+      {"id":"salvage_brass","name":"旧泵的接头","story":"去路边金属残骸回收黄铜和废铁，替湖务站修好旧水泵。","inputs":{"brass":5,"scrap":7},"reward":{"wire":5,"electronics":2},"xp":54}
+    ],
+    [
+      {"id":"stone_bed","name":"新菜圃的围边","story":"营地要砌一圈菜圃，从风化岩块带回石料就能领一份种子。","inputs":{"stone":14},"reward":{"seed_potato":3,"seed_corn":3},"xp":38},
+      {"id":"field_kitchen","name":"夜班热饭","story":"值夜人想吃口热的。在营火烤好肉带回来，库房有药品可换。","inputs":{"cooked_meat":2},"reward":{"medkit":1,"canned":2},"xp":60}
+    ],
+    [
+      {"id":"field_medicine","name":"秋雨前的药草","story":"护理箱急需补货。去林下采药草，顺路从浅滩折些芦秆给药架补层隔板。","inputs":{"medicinal_herb":5,"reed_stem":4},"reward":{"work_gloves":1,"clean_water":2},"xp":62},
+      {"id":"pump_overhaul","name":"泵房复工","story":"旧水泵的拨杆回不了位。从废弃机器拆下弹簧，再带一批高地铁矿回来。","inputs":{"spring":2,"iron_ore":5},"reward":{"hardhat":1,"tape":2},"xp":76}
+    ]
+  ],
+  "jobs": [{"name":"火种清单","story":"湖务站公告板上贴着一张修缮单。收集木料补齐物资储备，完成后可从柜中领取补给。","record":"wood","amount":20,"xp":70,"reward":{"scrap":12,"parts":6,"clean_water":2}},{"name":"储水计划","story":"公告板旁的蓄水槽可取生水。可在营火用木料煮沸，也可拿手压泵消耗纤维过滤。亲手收取两份净水，留一份交给驻地。","record":"got_safe_water","amount":2,"inputs":{"clean_water":1},"xp":100,"reward":{"seed_potato":4,"seed_corn":4,"antibiotic":2},"legacy":{"name":"储水计划","story":"上游断电后，净水泵再也没响过。去附近的废屋和车辆回收储备。","record":"loot","amount":4,"xp":100,"reward":{"seed_potato":4,"seed_corn":4,"antibiotic":2}}},{"name":"第七夜前","story":"林线上的噪声越来越密。在南岸加固一道能挡住第一波的防线。","record":"build","amount":12,"xp":125,"reward":{"cobble":25,"parts":10,"medkit":2}},{"name":"越过警戒线","story":"旧镇撤离名单没有填完。清出一条通往北岸的路，给留下来的人争取时间。","record":"kill","amount":18,"xp":200,"reward":{"pistol":1,"round":40,"coat":1}},{"name":"灰湾守夜人","story":"撑过一次血月。天亮时，灯塔能把你留下的信号带给对岸。","repair":{"name":"天亮后的补防","story":"昨夜防线失守。自失守后的黎明起，用框架补建四段防线，为值守箱交两份绷带。完成后继续信标任务。","record":"rebuild_watch","amount":4,"inputs":{"bandage":2},"xp":110,"reward":{"scrap":8,"parts":4}},"record":"horde","amount":1,"xp":350,"reward":{"steel":20,"electronics":12,"armor":1}},{"name":"重新点亮信标","story":"在医院、观测塔或巡防保险柜里找到旧镇信标记录，带回湖务站。","record":"beacon","amount":1,"xp":280,"reward":{"solar":1,"battery":1,"floodlight":2}}]
+}
