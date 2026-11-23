@@ -1,6 +1,6 @@
 # PhysicsCharacter 独立测试
 
-主动人体使用同一套刚体、关节和状态接口。[阶段 3 站立验收](active_tests/STANDING.md)记录独立 60 Hz 空间的实测结果。[阶段 4 行走试验](active_tests/WALKING.md)记录已发现的失稳、完整试验和复测入口。
+主动人体使用同一套刚体、关节和状态接口。阶段 3 站立通过，阶段 4 行走受阻。当前源码的八案结果、回滚检查点和测试入口见[主动物理角色阶段记录](active_tests/PHASE_STATUS.md)。
 
 阶段 2 的双频被动跌落、撞击、逐关节误差与实测耗时见[稳定性工程报告](stability/REPORT.md)。以下场景和命令保留阶段 1 基线。
 

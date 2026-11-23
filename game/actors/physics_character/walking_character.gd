@@ -3,6 +3,9 @@ extends "active_character.gd"
 const Gait := preload("controllers/gait_generator.gd")
 const WalkingBalance := preload("controllers/walking_balance.gd")
 const MovingMuscles := preload("controllers/walking_muscles.gd")
+## Empirical release threshold for a foot already carrying weight, in rad/s.
+## A release is recorded as a failed gait trial, including when the fall settles.
+const LOADED_FOOT_SPEED_LIMIT := 14.0
 var _moving_muscles := MovingMuscles.new()
 var _gait := Gait.new()
 var _balance := WalkingBalance.new()
@@ -47,7 +50,9 @@ func _actuate(state: State, intent: IntentFrame, delta: float) -> void:
 		var tilted := state.body_poses[&"chest"].basis.y.dot(Vector3.UP) < cos(deg_to_rad(30.0))
 		var unloaded := state.left_support_load_n + state.right_support_load_n < 0.12 * _body_weight_n
 		_unloaded_tilt_steps = _unloaded_tilt_steps + 1 if tilted and unloaded else 0
-		if state.fallen:
+		if _loaded_foot_overspeed(state):
+			_release_reason = "foot_overspeed"
+		elif state.fallen:
 			_release_reason = "fallen"
 		elif _unloaded_tilt_steps >= 2:
 			_release_reason = "tilted_without_support"
@@ -73,6 +78,11 @@ func _actuate(state: State, intent: IntentFrame, delta: float) -> void:
 	_coordinate_arms(state,command.heading)
 	_moving_muscles.step_walk(delta,_balance.relative_targets,_balance.feedforward_world_nm,
 		command.phase,command.support)
+
+func _loaded_foot_overspeed(state: State) -> bool:
+	var min_load := 0.03 * _body_weight_n
+	return ((state.left_support_load_n >= min_load and state.body_angular_velocities[&"foot_l"].length() > LOADED_FOOT_SPEED_LIMIT)
+		or (state.right_support_load_n >= min_load and state.body_angular_velocities[&"foot_r"].length() > LOADED_FOOT_SPEED_LIMIT))
 
 func _coordinate_arms(state: State, heading: Basis) -> void:
 	# Counter the measured fore-aft leg separation and give the passing thigh
