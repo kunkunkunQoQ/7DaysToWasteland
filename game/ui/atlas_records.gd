@@ -2,6 +2,8 @@ extends RefCounted
 
 const S := preload("res://game/ui/style.gd")
 const Stage := preload("res://game/ui/model_study.gd")
+const TerrainView := preload("res://game/ui/atlas_terrain_view.gd")
+const Landmarks := preload("res://game/ui/atlas_landmarks.gd")
 const LookPicker := preload("res://game/ui/infected_look_picker.gd")
 const Guide := preload("res://game/ui/field_guide.gd")
 const Profiles := preload("res://game/core/survivor_profiles.gd")
@@ -26,8 +28,7 @@ class PreviewContext extends Node3D:
 	var clock := WastelandClock.new()
 	var world_settings := {"difficulty":1.0,"zombie_speed":1.0}
 
-static var terrain := WastelandTerrainGen.new(2817,3)
-static var centers := {}
+static var terrain := WastelandTerrainGen.new(Landmarks.SEED)
 
 static func rows(category:String,catalog:WastelandCatalog)->Array[Dictionary]:
 	var list:Array[Dictionary]=[]
@@ -64,6 +65,17 @@ static func _row(id:String,title:String,subtitle:String,description:String)->Dic
 	return {"id":id,"name":title,"subtitle":subtitle,"description":description}
 
 static func detail(category:String,row:Dictionary,catalog:WastelandCatalog,parent:VBoxContainer,appearance:=Vector4i.ZERO)->void:
+	if category == "terrain":
+		var site := Landmarks.site(terrain, row)
+		var view := TerrainView.new()
+		view.custom_minimum_size = Vector2(0, 280)
+		view.ready.connect(view.show_sample.bind(terrain, site), CONNECT_ONE_SHOT)
+		parent.add_child(view)
+		var region := Frontier.NAMES.find(row.id)
+		var climate := "气温修正  %+.1f°C" % Frontier.TEMPERATURE[region] if region >= 0 else ""
+		view.add_controls(parent, site.span, climate)
+		parent.add_child(S.label(row.description, 17, S.TEXT, true))
+		return
 	var stage:=Stage.new()
 	stage.custom_minimum_size=Vector2(0,250)
 	parent.add_child(stage)
@@ -75,10 +87,6 @@ static func detail(category:String,row:Dictionary,catalog:WastelandCatalog,paren
 
 static func _preview(stage:Stage,category:String,row:Dictionary,catalog:WastelandCatalog,parent:VBoxContainer,appearance:Vector4i)->void:
 	match category:
-		"terrain":
-			_landscape(stage,row)
-			var idx:=Frontier.NAMES.find(row.id)
-			if idx>=0: parent.add_child(S.label("地区气温修正  %+.0f°C" % Frontier.TEMPERATURE[idx],16,S.MINT))
 		"characters":
 			var avatar:=WastelandPartyAvatar.new()
 			avatar.show_tag=false
@@ -149,93 +157,3 @@ static func _preview(stage:Stage,category:String,row:Dictionary,catalog:Wastelan
 			parent.add_child(S.label("物种基础值    生命 %d    移速 %.1f 米/秒    攻击 %d"%[spec.hp,spec.speed,spec.hit],16,S.MINT,true))
 			var note:String={"young":"幼体四肢较短，体型小于成年同类。","local":"地方型具有不同的毛色，体形比常见型略宽。","armored":"披甲型耐久更高，移动较慢。","swift":"迅行型身形瘦长，速度较快，耐久较低。"}.get(form,"")
 			if note!="": parent.add_child(S.label(note,16,S.MUTED,true))
-
-static func _center(row:Dictionary)->Vector2:
-	var id:String=row.id
-	if centers.has(id): return centers[id]
-	var at:=Vector2(12,-42)
-	if id=="oasis" or id in Frontier.NAMES:
-		for x in range(1,13):
-			for z in range(-2,3):
-				var spot:=terrain.frontier._district(Vector2i(x,z))
-				var point:=Vector2(spot.x,spot.z)
-				if terrain.region_kind(point.x,point.y)==("desert" if id=="oasis" else id):
-					at=point+Vector2(64,-33) if id=="oasis" else point
-					centers[id]=at
-					return at
-	elif id!="basin":
-		var closest:=INF
-		for x in range(-200,201,8):
-			for z in range(-190,191,8):
-				if terrain.landform(x,z)!=row.name: continue
-				var score:=Vector2(x,z).distance_squared_to(Vector2(12,-42))
-				if id.begins_with("bay_") and id!="bay_0" and terrain.ground(x,z)<1.0: continue
-				if score<closest:
-					closest=score
-					at=Vector2(x,z)
-	centers[id]=at
-	return at
-
-static func _landscape(stage:Stage,row:Dictionary)->void:
-	var at:=_center(row)
-	var span:=255.0 if row.id=="basin" else 115.0 if row.id in Frontier.NAMES else 68.0
-	var patch:=WastelandScenery.new(2817)
-	var peak:=-INF
-	var low:=INF
-	var step:=span/30.0
-	var grid:=PackedVector3Array()
-	for z in 31:
-		for x in 31:
-			var local:=Vector2(x*step-span*0.5,z*step-span*0.5)
-			var world:=local+at
-			var h:=terrain.ground(world.x,world.y)
-			grid.append(Vector3(local.x,h,local.y))
-			peak=maxf(peak,h)
-			low=minf(low,h)
-	var center_y:=(peak+low)*0.5
-	for z in 30:
-		for x in 30:
-			var i:=z*31+x
-			var a:=grid[i]
-			var b:=grid[i+1]
-			var c:=grid[i+31]
-			var d:=grid[i+32]
-			var tint:=terrain.ground_color(at.x+a.x,at.y+a.z,a.y)
-			patch.triangle(a,c,b,Vector3.UP,tint)
-			patch.triangle(b,c,d,Vector3.UP,tint)
-			if minf(minf(a.y,b.y),minf(c.y,d.y))<0 and terrain.water_basin(at.x+a.x,at.y+a.z):
-				var water:=Color("#598e98")
-				a.y=0.02
-				b.y=0.02
-				c.y=0.02
-				d.y=0.02
-				patch.triangle(a,c,b,Vector3.UP,water)
-				patch.triangle(b,c,d,Vector3.UP,water)
-	var mesh:=MeshInstance3D.new()
-	mesh.mesh=patch.commit()
-	mesh.material_override=WastelandLook.colored_material()
-	stage.scene.add_child(mesh)
-	var first:=WastelandTerrainGen.chunk_at(at-Vector2.ONE*span*0.5)
-	var last:=WastelandTerrainGen.chunk_at(at+Vector2.ONE*span*0.5)
-	var species:={}
-	for x in range(first.x,last.x+1):
-		for z in range(first.y,last.y+1):
-			var cell:=Vector2i(x,z)
-			var origin:=Vector2(cell*32)
-			for entry:Dictionary in terrain._dressing(cell,origin,origin+Vector2(16,16),terrain.site_for(cell)):
-				if entry.id not in ["oak","pine","boulder","brush","cactus"]: continue
-				var p:Vector3=entry.point+Vector3(origin.x-at.x,0,origin.y-at.y)
-				if maxf(absf(p.x),absf(p.z))>=span*0.50: continue
-				var model:String=entry.get("model","")
-				if model=="": model=entry.id
-				if not species.has(model): species[model]=[]
-				species[model].append(Transform3D(Basis(Vector3.UP,entry.angle).scaled(Vector3.ONE*float(entry.scale)),p))
-	for model:String in species:
-		var transforms:Array[Transform3D]=[]
-		transforms.assign(species[model])
-		var plants:=WastelandLook.instanced(mesh,WastelandChunk._nature_mesh(model,0,false),transforms)
-		plants.material_override=WastelandLook.colored_material()
-	stage.camera.size=span*1.46
-	stage.camera.far=span*6.0
-	stage.camera.position=Vector3(span*0.67,center_y+span*0.75,-span*1.1)
-	stage.camera.look_at(Vector3(0,center_y,0))

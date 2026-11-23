@@ -11,6 +11,7 @@ var entries: Array = []
 var page_rows := {}
 var selection := -1
 var tabs := HBoxContainer.new()
+var sidebar: VBoxContainer
 var list_scroll := ScrollContainer.new()
 var list := VBoxContainer.new()
 var detail_scroll := ScrollContainer.new()
@@ -35,12 +36,11 @@ func setup(data:WastelandCatalog, back:Callable) -> void:
 		tabs.add_child(button)
 	var row:=S.line(self)
 	row.size_flags_vertical=Control.SIZE_EXPAND_FILL
-	var left:=S.column(row,6)
-	left.custom_minimum_size.x=318
-	left.add_child(page_label)
+	sidebar=S.column(row,6)
+	sidebar.add_child(page_label)
 	page_label.add_theme_font_size_override("font_size",16)
 	page_label.add_theme_color_override("font_color",S.MUTED)
-	left.add_child(list_scroll)
+	sidebar.add_child(list_scroll)
 	list_scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL
 	list_scroll.follow_focus=true
 	list_scroll.horizontal_scroll_mode=ScrollContainer.SCROLL_MODE_DISABLED
@@ -76,6 +76,7 @@ func _clear(box:Control) -> void:
 
 func choose_category(key:String) -> void:
 	category=key
+	sidebar.custom_minimum_size.x=242 if key=="terrain" else 318
 	_clear(list)
 	buttons.clear()
 	selection=-1
@@ -129,6 +130,7 @@ func _reveal_after_layout(key:String,index:int) -> void:
 
 func select_entry(index:int) -> void:
 	if index<0 or index>=entries.size(): return
+	if category=="terrain" and index==selection: return
 	var old:=selection
 	selection=index
 	for i in [old,index]:
@@ -147,8 +149,14 @@ func select_entry(index:int) -> void:
 	var item:Dictionary=entries[index]
 	list_scroll.ensure_control_visible(buttons[index])
 	if category!="achievements":
-		detail.add_child(S.label(str(item.name),29,S.TEXT,true))
-		if item.get("subtitle","")!="": detail.add_child(S.label(str(item.subtitle),16,S.GOLD,true))
+		if category=="terrain":
+			var heading:=S.line(detail)
+			heading.add_child(S.label(item.name,29,S.TEXT))
+			S.fill(heading)
+			heading.add_child(S.label(item.subtitle,16,S.GOLD))
+		else:
+			detail.add_child(S.label(str(item.name),29,S.TEXT,true))
+			if item.get("subtitle","")!="": detail.add_child(S.label(str(item.subtitle),16,S.GOLD,true))
 		preload("res://game/ui/atlas_records.gd").detail(category,item,catalog,detail,appearance)
 		return
 	detail.add_child(S.label(str(GROUPS.get(item.get("category",""),"成就")),16,S.GOLD))

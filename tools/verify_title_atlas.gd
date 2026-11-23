@@ -1,5 +1,8 @@
 extends SceneTree
 
+const TerrainView := preload("res://game/ui/atlas_terrain_view.gd")
+const Landmarks := preload("res://game/ui/atlas_landmarks.gd")
+
 var failures:=0
 var app:Node
 
@@ -25,6 +28,29 @@ func click(button:Button)->void:
 func capture()->bool:
 	return "--capture" in OS.get_cmdline_user_args() and DisplayServer.get_name()!="headless"
 
+func check_terrain(atlas: Control) -> void:
+	var generator := preload("res://game/ui/atlas_records.gd").terrain
+	var locations := {}
+	for row: Dictionary in atlas.entries:
+		locations[Landmarks.site(generator, row).center] = true
+	check(locations.size() == atlas.entries.size(), "every terrain entry has a distinct survey window")
+	var view := atlas.detail.find_child("TerrainView", true, false) as TerrainView
+	if view == null:
+		check(false, "terrain viewer opens")
+		return
+	var start := view.camera.transform
+	click(view.plan_button)
+	check(view.camera.basis.z.dot(Vector3.UP) > 0.999, "plan button shows the terrain from directly above")
+	var rect := Rect2(Vector2.ZERO, Vector2(view.scene.size))
+	var fits := true
+	for corner in 8:
+		if not rect.has_point(view.camera.unproject_position(view.bounds.get_endpoint(corner))):
+			fits = false
+			break
+	check(fits, "plan view includes the complete terrain sample")
+	click(view.plan_button)
+	check(view.camera.transform.is_equal_approx(start), "switching back restores the oblique view")
+
 func run()->void:
 	WastelandSave.root_override="user://verification/title-atlas-%d"%OS.get_process_id()
 	app=load("res://main.tscn").instantiate()
@@ -39,6 +65,7 @@ func run()->void:
 	var atlas:Control=app.front.shell.find_child("TitleAtlas",true,false)
 	check(atlas!=null and app.front.screen=="atlas","pointer opens atlas without entering a world")
 	check(atlas.category=="terrain" and not atlas.entries.is_empty(),"fresh profile opens on browsable terrain")
+	check_terrain(atlas)
 	click(atlas.tabs.get_node("achievements"))
 	await process_frame
 	check(atlas.buttons.size()==app.catalog.achievements.size() and atlas.entries.all(func(e):return not e.unlocked),"fresh profile has one dark tile per achievement")

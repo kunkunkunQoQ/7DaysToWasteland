@@ -2,6 +2,8 @@ extends SubViewportContainer
 
 var scene := SubViewport.new()
 var camera := Camera3D.new()
+var key: DirectionalLight3D
+var rim: DirectionalLight3D
 var portrait_zoom := "半身"
 var subject: WastelandPartyAvatar
 var creature: WastelandCreature
@@ -30,12 +32,12 @@ func _ready() -> void:
 	camera.environment = env
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	scene.add_child(camera)
-	var key := DirectionalLight3D.new()
+	key = DirectionalLight3D.new()
 	scene.add_child(key)
 	key.rotation_degrees = Vector3(-32,145,0)
 	key.light_color = Color("#ffe5c1")
 	key.light_energy = 1.08
-	var rim := DirectionalLight3D.new()
+	rim = DirectionalLight3D.new()
 	scene.add_child(rim)
 	rim.rotation_degrees = Vector3(-26,-40,0)
 	rim.light_color = Color("#a1d5c6")
