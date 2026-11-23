@@ -1,6 +1,6 @@
 <h1 align="center">七日荒原</h1>
 <p align="center">
-  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/tag/v0.6.6"><img src="https://img.shields.io/badge/version-0.6.6-815526?style=flat-square" alt="游戏版本 0.6.6"></a>
+  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/tag/v0.6.7"><img src="https://img.shields.io/badge/version-0.6.7-815526?style=flat-square" alt="游戏版本 0.6.7"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20x64%20%7C%20Android-475569?style=flat-square" alt="支持 Windows x64 和 Android">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL%203.0-45654D?style=flat-square" alt="开源许可 GPL 3.0，仅限第 3 版"></a>
 </p>
@@ -9,11 +9,11 @@
 
 <h2 align="center">下载游戏</h2>
 <p align="center">
-  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/download/v0.6.6/7DaysToWasteland-Windows-x64.zip"><img height="38" src="https://img.shields.io/badge/Windows%20x64-ZIP-1667A3?style=for-the-badge&amp;labelColor=174D73" alt="下载 Windows x64 压缩包"></a>
+  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/download/v0.6.7/7DaysToWasteland-Windows-x64.zip"><img height="38" src="https://img.shields.io/badge/Windows%20x64-ZIP-1667A3?style=for-the-badge&amp;labelColor=174D73" alt="下载 Windows x64 压缩包"></a>
   &nbsp;
-  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/download/v0.6.6/7DaysToWasteland.apk"><img height="38" src="https://img.shields.io/badge/Android-APK-28744D?style=for-the-badge&amp;labelColor=20573C" alt="下载安卓 APK"></a>
+  <a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/download/v0.6.7/7DaysToWasteland.apk"><img height="38" src="https://img.shields.io/badge/Android-APK-28744D?style=for-the-badge&amp;labelColor=20573C" alt="下载安卓 APK"></a>
 </p>
-<p align="center"><a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/tag/v0.6.6">查看 0.6.6 更新说明</a></p>
+<p align="center"><a href="https://github.com/kunkunkunQoQ/7DaysToWasteland/releases/tag/v0.6.7">查看 0.6.7 更新说明</a></p>
 
 <p align="center"><img src="docs/screenshots/oak.webp" width="848" alt="荒原中的橡树，游戏实机动图"></p>
 
@@ -53,7 +53,7 @@
 
 - **Windows x64**　下载页首的 ZIP，解压后运行 `7DaysToWasteland.exe`。需要兼容渲染时，运行同目录的 `Start-Compatibility.cmd`。
 - **Android**　安装 APK 后横屏游玩，需要 Android 7.0 或更高版本并支持 OpenGL ES 3.0。双点移动摇杆，第二次向前推住即可疾跑。触控大小和左右手布局可在「系统设置 → 操控」调整。
-- **1–6 人局域网**　房主在暂停菜单开放世界，最多 5 位队友可用同一版本从「附近的世界」加入，也可手动输入局域网地址。队友需留在房主附近。箱子和世界进度由队伍共享，每个人的背包、装备、快捷栏和手工制作队列分别保存在房主的世界存档里。单人和联机游玩时，背包有变动就会触发自动保存，约 5 秒内的连续操作会合并写入。队友也可在暂停菜单选择「保存个人背包」，下次用原设备加入这个存档即可继续。升级旧存档时，原共享物资和手工制作队列归房主。
+- **1–6 人局域网**　房主在暂停菜单开放世界，最多 5 位队友可用同一版本从「附近的世界」加入，也可手动输入局域网地址。队友需留在房主附近。箱子和世界进度由队伍共享，每个人的背包、装备、快捷栏和手工制作队列分别保存在房主的世界存档里。单人和联机游玩时，背包有变动就会触发自动保存，约 5 秒内的连续操作会合并写入。队友也可在暂停菜单选择「保存世界」，下次用原设备加入这个存档即可继续。升级旧存档时，原共享物资和手工制作队列归房主。
 - **从源码运行**　用 Godot 4.6.3 标准版导入根目录的 `project.godot`，按 **F5** 启动。物品、配方与委托在 [data](data)，游戏逻辑在 [game](game)，回归检查在 [tools](tools)。
 
 <p align="center"><img src="docs/screenshots/mobile.png" width="720" alt="安卓触屏实机，左侧为移动摇杆，右侧为动作键"></p>
