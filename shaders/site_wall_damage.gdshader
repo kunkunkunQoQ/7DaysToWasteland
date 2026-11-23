@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode specular_disabled, shadows_disabled, depth_draw_never;
+render_mode specular_disabled, depth_draw_never;
 
 uniform bool severe = false;
 uniform bool timber = false;

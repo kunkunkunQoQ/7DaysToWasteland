@@ -5,6 +5,7 @@ uniform sampler2D screen_depth : hint_depth_texture, repeat_disable, filter_near
 uniform vec3 sun_dir = vec3(-0.35, 0.14, -0.926);
 uniform float daylight = 0.62;
 uniform float twilight = 0.92;
+uniform float moonlight = 0.0;
 uniform float blood = 0.0;
 uniform float rain = 0.0;
 uniform float seconds = 0.0;
@@ -52,8 +53,10 @@ void fragment() {
 	float sky_wave = sin(dot(p, vec2(0.12, 0.56)) + drift * 2.0 - seconds * 0.36);
 	float sky_band = smoothstep(0.53, 0.94, sky_wave) * smoothstep(-0.3, 0.8, broad);
 	col += vec3(0.035, 0.045, 0.039) * sky_band * sunlit;
-	vec3 amber = mix(vec3(0.92, 0.64, 0.37), vec3(1.0, 0.82, 0.53), streak);
-	col = mix(col, amber, trail * (0.13 + 0.55 * streak) * sunlit * (1.0 - rain * 0.72));
+	vec3 reflection_color = mix(vec3(0.92, 0.64, 0.37), vec3(1.0, 0.82, 0.53), streak);
+	reflection_color = mix(reflection_color, vec3(0.53, 0.65, 0.87), moonlight);
+	reflection_color = mix(reflection_color, vec3(0.92, 0.19, 0.25), blood);
+	float reflection_strength = mix(sunlit, 0.38, moonlight) * (1.0 - rain * 0.82);
 	float lap = 1.0 - smoothstep(0.025, 0.13, abs(water_depth - 0.14 - broad * 0.07));
 	col = mix(col, vec3(0.63, 0.76, 0.61) * mix(0.37, 1.0, sunlit), lap * (0.16 + 0.22 * max(0.0, drift)));
 	float shelf = smoothstep(0.05, 0.48, water_depth) * (1.0 - smoothstep(0.85, 2.0, water_depth));
@@ -61,6 +64,7 @@ void fragment() {
 	col += vec3(0.095, 0.092, 0.055) * light_net * shelf * sunlit * fine_fade;
 	col = mix(col, vec3(0.15, 0.23, 0.30), rain * 0.36);
 	col = mix(col, col * vec3(0.61, 0.31, 0.61) + vec3(0.047, 0.005, 0.027), blood);
+	col = mix(col, reflection_color, trail * (0.13 + 0.55 * streak) * reflection_strength);
 	ALBEDO = col;
 	ALPHA = mix(0.57, 1.0, smoothstep(0.0, 1.55, water_depth));
 	if (CAMERA_POSITION_WORLD.y < -0.035) {

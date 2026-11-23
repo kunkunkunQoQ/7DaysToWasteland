@@ -146,7 +146,9 @@ func _ready() -> void:
 	light.shadow_enabled = true
 	light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 	light.directional_shadow_max_distance = 74.0
-	light.shadow_bias = 0.1
+	light.directional_shadow_split_1 = 0.16
+	light.shadow_bias = 0.08
+	light.shadow_normal_bias = 1.25
 	add_child(light)
 	add_outline(self)
 
@@ -206,10 +208,12 @@ func sync(clock: WastelandClock, delta: float, eye: Vector3, look: Vector3, audi
 		distant_basin.mesh = mesh
 		baked_horizon_revision = horizon_revision
 	var hour := clock.hour()
-	var sun_height := sin((hour - 6.0) * TAU / 24.0)
-	var azimuth := lerpf(1.85, -0.35, clampf((hour - 6.0) / 12.0, 0.0, 1.0))
+	var phase := (hour - 6.0) * TAU / 24.0
+	var sun_height := sin(phase)
+	var azimuth := lerpf(1.85, -0.35, 0.5 - 0.5 * cos(phase))
 	var dusk := 1.0 - smoothstep(0.035, 0.54, absf(sun_height))
 	var daylight := smoothstep(-0.10, 0.76, sun_height)
+	var moonlight := 1.0 - smoothstep(-0.18, 0.18, sun_height)
 	var blood := clock.blood()
 	var weights := clock.weather()
 	rain_strength = weights.z * 0.62 + weights.w
@@ -218,20 +222,16 @@ func sync(clock: WastelandClock, delta: float, eye: Vector3, look: Vector3, audi
 	for k in range(1, 4):
 		if weights[k] > weights[weather_kind]:
 			weather_kind = k
-	var light_dir := Vector3(sin(azimuth), sun_height, -cos(azimuth)).normalized()
-	if hour >= 18.0 or hour < 6.0:
-		var night_phase := fposmod(hour + 6.0, 24.0) / 12.0
-		var moon_height := maxf(0.07, 0.54 * sin(clampf(night_phase, 0.0, 1.0) * PI))
-		var moon_arc := lerpf(-0.78, 1.06, night_phase)
-		light_dir = Vector3(sin(moon_arc), moon_height, -cos(moon_arc)).normalized()
-	if blood > 0.0 and hour >= 18.0:
-		dusk = maxf(dusk, 0.48 * blood)
-	sun_strength = maxf(daylight, 0.32 * dusk)
+	var body_height := maxf(sun_height, -0.54 * sun_height)
+	var light_dir := Vector3(sin(azimuth), body_height, -cos(azimuth)).normalized()
+	# Power generation and creature sight use the original evening blood-moon bonus.
+	var gameplay_dusk := maxf(dusk, 0.48 * blood) if hour >= 18.0 else dusk
+	sun_strength = maxf(daylight, 0.32 * gameplay_dusk)
 	light.look_at_from_position(light_dir * 30.0, Vector3.ZERO, Vector3.UP)
 	var cloud_wet := clampf(rain_strength * 0.9 + weights.y * 0.38, 0.0, 1.0)
-	var light_color := Color("#a498cf").lerp(Color("#ffebca"), daylight)
-	light_color = light_color.lerp(Color("#ffd0a0"), dusk)
-	light.light_color = light_color.lerp(Color("#f45f79"), blood)
+	var light_color := Color("#ffeacb").lerp(Color("#acbde5"), moonlight)
+	light_color = light_color.lerp(Color("#ffc18b"), dusk * (1.0 - moonlight))
+	light_color = light_color.lerp(Color("#ced7e0"), cloud_wet * 0.48).lerp(Color("#f47789"), blood)
 	lightning = move_toward(lightning, 0.0, step * 3.5)
 	next_flash -= step
 	if weights.w > 0.65 and next_flash < 0.0:
@@ -239,19 +239,24 @@ func sync(clock: WastelandClock, delta: float, eye: Vector3, look: Vector3, audi
 		next_flash = 6.0 + fposmod(clock.hours * 321.0, 11.0)
 		if audio != null:
 			audio.play_at("thunder", eye + Vector3(0, 16, -22), 1.0, false)
-	light.light_energy = lerpf(0.28 + 0.39 * dusk, 1.18, daylight) * (1.0 - cloud_wet * 0.66) + lightning * 1.4
-	light.light_energy *= lerpf(1.0, 0.89, blood)
-	env.ambient_light_color = Color("#8290a6").lerp(Color("#c3d8ca"), daylight * 0.80 + dusk * 0.18).lerp(Color("#724273"), blood)
-	env.ambient_light_energy = (0.37 + 0.37 * daylight + 0.19 * dusk) * lerpf(1.0, 0.69, blood) + lightning * 0.27
-	var horizontal := Vector2(light_dir.x, light_dir.z).normalized()
-	var face := maxf(0.0, Vector2(look.x, look.z).normalized().dot(horizontal))
-	var pastel := Color("#8baaa5").lerp(Color("#e9af88"), pow(face, 2.4))
-	var fog := Color("#332a50").lerp(Color("#9697a3"), daylight).lerp(pastel, dusk)
-	env.fog_light_color = fog.lerp(Color("#653450").lerp(Color("#8e334c"), face), blood)
+	light.light_color = light_color.lerp(Color("#e4efff"), lightning * 0.82)
+	light.light_energy = lerpf(0.31 + 0.36 * dusk, 1.2, daylight) * (1.0 - cloud_wet * 0.68) + lightning * 1.25
+	var shadow_contrast := lerpf(0.94, 0.66, moonlight) * (1.0 - 0.65 * cloud_wet)
+	light.shadow_opacity = shadow_contrast * smoothstep(0.015, 0.23, light_dir.y)
+	var fill := Color("#8c9dbb").lerp(Color("#bfd1dd"), daylight).lerp(Color("#b0a5b3"), dusk * 0.44)
+	env.ambient_light_color = fill.lerp(Color("#997594"), blood)
+	env.ambient_light_energy = (0.43 + 0.25 * daylight + 0.10 * dusk + 0.10 * cloud_wet * daylight) * (1.0 - 0.18 * blood) + lightning * 0.22
+	var face := maxf(0.0, look.dot(Vector3(light_dir.x, 0.0, light_dir.z).normalized()))
+	var pastel := Color("#8b9fa5").lerp(Color("#d9ab8e"), pow(face, 2.4))
+	var fog := Color("#332e4e").lerp(Color("#a2acb5"), daylight).lerp(pastel, dusk)
+	fog = fog.lerp(Color("#44495c").lerp(Color("#929aa3"), daylight), cloud_wet * 0.45)
+	env.fog_light_color = fog.lerp(Color("#643853").lerp(Color("#884457"), face), blood)
+	env.fog_light_energy = 1.0 + lightning * 0.20
 	env.fog_density = 0.0058 + weights.y * 0.023 + rain_strength * 0.012 + blood * 0.004
 	for material in [sky_mat, water_mat]:
 		material.set_shader_parameter("sun_dir", light_dir)
 		material.set_shader_parameter("daylight", daylight)
+		material.set_shader_parameter("moonlight", moonlight)
 		material.set_shader_parameter("twilight", dusk)
 		material.set_shader_parameter("blood", blood)
 	sky_mat.set_shader_parameter("wet", cloud_wet)
@@ -260,6 +265,7 @@ func sync(clock: WastelandClock, delta: float, eye: Vector3, look: Vector3, audi
 	water_mat.set_shader_parameter("seconds", clock.elapsed)
 	terrain_mat.set_shader_parameter("wind_time", clock.elapsed)
 	terrain_mat.set_shader_parameter("rain", rain_strength)
+	terrain_mat.set_shader_parameter("sunlight", daylight * (1.0 - cloud_wet))
 	if rain_strength > 0.12 and rain_fx == null:
 		_add_rain()
 	if rain_fx != null:
