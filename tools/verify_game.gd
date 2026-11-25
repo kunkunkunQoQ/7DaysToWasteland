@@ -24,9 +24,10 @@ func _prepare() -> void:
 	Engine.max_fps = 0
 	if visual:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-	await _wait_for_chunks(25)
+	var stream: WastelandStream = app.session.stream
+	await _wait_for_preview(stream)
 	_assert(app.front.screen == "title", "main menu starts")
-	_assert(app.session.stream.active.size() >= 20, "preview streams terrain")
+	_assert(not stream.preview_cells.is_empty() and stream.active.has_all(stream.preview_cells.keys()), "preview streams the visible terrain")
 	if visual:
 		await _capture("01-main-menu")
 	app.front.creation()
@@ -140,10 +141,8 @@ func _prepare() -> void:
 	_assert(cell != Vector3i(0,-990,0),"find buildable ground")
 	if cell != Vector3i(0,-990,0):
 		_assert(structure.place(cell,"frame",0,0,session.player.global_position),"place anchored frame")
+		await _verify_frame_hardness(cell)
 		_assert(structure.place(cell+Vector3i.UP,"frame",2,0,session.player.global_position),"place supported upper part")
-		session.bag.add("wood",40)
-		structure.upgrade(cell)
-		_assert(int(structure.blocks.get(cell,{}).get("tier",0))==1,"reinforcement consumes materials")
 		structure.damage(cell,10000.0)
 		_assert(not structure.blocks.has(cell+Vector3i.UP),"destroying a support collapses the upper part")
 	var station_cell := _build_cell(4, "campfire")
@@ -178,12 +177,13 @@ func _prepare() -> void:
 	clock.hours = 7.0*24.0+4.0
 	_assert(not clock.horde_active(),"horde ends at 04:00")
 	session.simulation_paused = true
+	var inventory_at_save := session.bag.counts.duplicate()
 	_assert(session.save_now(false)==OK,"manual save updates existing slot")
 	_assert(session.save_now(false)==OK,"slot can commit while a backup exists")
 	var saved := WastelandSave.read(1)
 	_assert(not saved.is_empty() and saved.settings.seed==config.seed,"snapshot round-trips the seed")
 	_assert(saved.get("markers",[]).size()==1 and not saved.get("diffs",{}).is_empty(),"snapshot includes exploration and chunk changes")
-	_assert(saved.get("bag",{}).get("counts",{}).get("bandage",0)==old_bandages+2,"snapshot contains inventory")
+	_assert(saved.get("bag",{}).get("counts",{})==inventory_at_save and inventory_at_save.get("bandage",0)>=old_bandages+2,"snapshot contains crafted and looted inventory")
 	_assert(saved.diffs.values().any(func(row): return not row.get("removed",{}).is_empty()),"loose branches and stones remain collected across saves")
 	if station_cell != Vector3i(0,-990,0):
 		_assert(saved.construction.blocks.has(station_cell),"snapshot contains placed station")
@@ -203,8 +203,8 @@ func _prepare() -> void:
 	await _frames(88)
 	_assert(not session.stream.active.has(Vector2i(0,1)) and session.stream.active.size()<=maxi(125,from_count+20),"moving far unloads the prior neighborhood")
 	WastelandSave.delete_slot(1)
-	_validate_assets()
 	session.simulation_paused=true
+	await _validate_assets()
 	await session.stream.quiesce()
 	app._remove_session()
 	app.queue_free()
@@ -215,6 +215,30 @@ func _prepare() -> void:
 	for issue in failures:
 		printerr("FAILED: "+issue)
 	quit(0 if failures.is_empty() else 1)
+
+func _verify_frame_hardness(cell: Vector3i) -> void:
+	var structure := session.construction
+	var camera := session.player.camera
+	var original := camera.transform
+	var slot := session.bag.active
+	var held := session.bag.current()
+	var costs := [2.0, 2.0, 3.0, 3.0, 4.0]
+	for tier in costs.size():
+		await physics_frame
+		var point := WastelandConstruction.position_of(cell)
+		camera.global_position = point + Vector3.UP * 0.9
+		camera.look_at(point, Vector3.BACK)
+		session.bag.assign("", slot)
+		var health := session.player.health
+		var hit := session._trace(2.58, 15, false, true, true)
+		session._melee({}, 1.0)
+		_assert(structure.blocks[cell].tier == tier and hit.get("collider") == structure.nodes[cell] and session.player.health == health - costs[tier], "%s block costs %d health per punch" % [WastelandCatalog.TIER_NAMES[tier], costs[tier]])
+		if tier == costs.size() - 1: break
+		for price: Dictionary in [WastelandConstruction.REPAIR[tier], WastelandConstruction.UPGRADE[tier]]:
+			for material: String in price: session.bag.add(material, price[material])
+			structure.upgrade(cell)
+	session.bag.assign(held, slot)
+	camera.transform = original
 
 func _aim_at_resource(kinds: Array) -> StaticBody3D:
 	var origin := session.player.global_position
@@ -245,12 +269,15 @@ func _aim_at_resource(kinds: Array) -> StaticBody3D:
 	session.player.global_position=origin
 	return null
 
-func _strike_resource() -> void:
+func _strike_resource() -> float:
+	var health := session.player.health
 	Input.action_press("fire")
 	session._process_controls(1.0/60.0)
 	Input.action_release("fire")
+	var cost := health - session.player.health
 	while session.action_lock>0.0:
 		await physics_frame
+	return cost
 
 func _verify_quickbar(bag: WastelandBag) -> void:
 	bag.spend({"club":1})
@@ -295,10 +322,15 @@ func _verify_first_axe() -> void:
 		_assert(session.bag.count(pair[1])>=required,"gather "+str(pair[1])+" safely from ground")
 		_assert(session.bag.bar.count(pair[1])==1,"first pickups bind "+str(pair[1])+" once")
 	_assert(is_equal_approx(player.health,full_health),"first axe ingredients cost no health")
+	var pebble_cost := 0.0
+	if _aim_at_resource(["pebble"]):
+		pebble_cost = await _strike_resource()
+	_assert(pebble_cost == 1.0, "punching a loose pebble costs one health")
 	var trunk:=_aim_at_resource(["oak","pine"])
+	var tree_cost := 0.0
 	if trunk:
-		await _strike_resource()
-	_assert(trunk!=null and player.health<full_health,"only punching a live tree hurts the bare hand")
+		tree_cost = await _strike_resource()
+	_assert(tree_cost == 2.0 and player.injury.last_source == "bark", "one bare-hand strike on a live tree costs two health from bark")
 	if session.bag.has_all(session.catalog.recipes.stone_axe.inputs):
 		session.ui_command("craft",["stone_axe",1,null])
 		for i in 160:
@@ -328,9 +360,9 @@ func _verify_first_axe() -> void:
 	player.camera.rotation=camera_rotation
 	player.velocity=Vector3.ZERO
 
-func _wait_for_chunks(count: int) -> void:
+func _wait_for_preview(stream: WastelandStream) -> void:
 	for step in range(350):
-		if app.session.stream.active.size() >= count:
+		if stream.queued.is_empty() and stream.jobs.is_empty():
 			return
 		if not visual:
 			OS.delay_msec(2)
@@ -622,8 +654,11 @@ func _validate_assets() -> void:
 			every_item=every_item and icon.get_image().get_used_rect().has_area()
 	_assert(every_item,"catalogue items have a non-empty model and icon")
 	var rigs:=true
+	var point := session.player.global_position + Vector3.FORWARD * 4.0
+	point.y = maxf(session.stream.ground_at(point),session.player.global_position.y) + 2.5
+	var platform := WastelandLook.solid(session,Vector3(3,0.30,3),point-Vector3.UP*0.18,Color.SLATE_GRAY)
+	await physics_frame
 	for id in session.catalog.enemies:
-		var point:=session.player.global_position+Vector3.FORWARD*6.3
 		if not session.hordes._spawn(id,point,false,{"limb_index":0}):
 			rigs=false
 			continue
@@ -631,28 +666,35 @@ func _validate_assets() -> void:
 		actor._pose(0.09,5.0)
 		rigs=rigs and actor.skeleton.get_bone_count()>=7
 		if not actor.spec.get("animal", false):
-			_verify_zombie_wrists(actor)
+			await _verify_zombie_wrists(actor)
 		session.hordes.release(actor)
+	platform.queue_free()
 	_assert(rigs,"all zombie and wildlife rigs assemble and animate")
 	_assert(session.player.hand.get_parent()==app.hands_camera,"hands have an independent camera and depth buffer")
 	_assert(app.ui_group.material.get_shader_parameter("strength")>0.0,"Chinese interface soft focus is active")
 
 func _verify_zombie_wrists(actor: WastelandCreature) -> void:
 	var skeleton := actor.skeleton
+	var motor := actor.active_motion
+	_assert(motor != null,actor.type + " uses the live articulated motor rig")
+	if motor == null: return
+	for i in 24: await physics_frame
 	var right_wrist := skeleton.find_bone("hand_r")
 	var idle_y := skeleton.get_bone_global_pose(right_wrist).origin.y if right_wrist >= 0 else 0.0
 	actor.alerted = true
 	actor.attack = 1.0
 	actor._pose(0.09, 3.0)
+	motor.restore_targets()
+	_assert(_hands_reach_forward(skeleton),actor.type + " has forward wrist targets for the strike")
+	motor.capture_targets()
+	for i in 36: await physics_frame
 	var aligned := true
-	var reaches_forward := true
 	for side in [-1, 1]:
 		var suffix := "l" if side < 0 else "r"
 		var wrist := skeleton.find_bone("hand_" + suffix)
 		var elbow := skeleton.find_bone("elbow_" + suffix)
 		if wrist < 0 or elbow < 0:
 			aligned = false
-			reaches_forward = false
 			continue
 		var rest := skeleton.get_bone_rest(wrist)
 		var palm: MeshInstance3D = actor.body_parts["hand_" + suffix].get_node_or_null("HandMesh")
@@ -663,18 +705,19 @@ func _verify_zombie_wrists(actor: WastelandCreature) -> void:
 		var thumb_reach := (bounds.end.x + bounds.position.x) * -float(side)
 		aligned = aligned and thumb_reach > 0.022 and skeleton.get_bone_parent(wrist) == elbow
 		aligned = aligned and (-rest.basis.z).dot(rest.origin.normalized()) > 0.93 and rest.basis.determinant() > 0.99
-		var pose := skeleton.get_bone_global_pose(wrist)
-		var elbow_pose := skeleton.get_bone_global_pose(elbow)
-		reaches_forward = reaches_forward and pose.origin.z < elbow_pose.origin.z - 0.14
-		reaches_forward = reaches_forward and pose.basis.z.z > 0.60 and pose.origin.x * float(side) > 0.19
 	_assert(aligned, actor.type + " has mirrored thumbs and wrists aligned with the forearms")
-	_assert(reaches_forward, actor.type + " reaches forward with both hands at the strike pose")
+	_assert(_hands_reach_forward(skeleton), actor.type + " physically reaches forward with both hands at the strike pose")
 	if actor.type != "brute" or right_wrist < 0:
 		return
 	var strike := skeleton.get_bone_global_pose(right_wrist)
 	actor.attack = 0.0
 	actor.windup = 0.92
 	actor._pose(0.09, 3.0)
+	motor.restore_targets()
+	var lift_target := skeleton.get_bone_global_pose(right_wrist)
+	_assert(lift_target.origin.y > idle_y+0.34 and lift_target.origin.y > strike.origin.y+0.10,"sapper targets a raised hammer before swinging")
+	motor.capture_targets()
+	for i in 45: await physics_frame
 	var lifted := skeleton.get_bone_global_pose(right_wrist)
 	var grip: Marker3D = actor.body_parts.hand_r.get_node_or_null("HammerGrip")
 	var hammer: MeshInstance3D = grip.get_node_or_null("Hammer") if is_instance_valid(grip) else null
@@ -685,3 +728,15 @@ func _verify_zombie_wrists(actor: WastelandCreature) -> void:
 	_assert(skeleton.get_bone_pose(right_wrist).is_equal_approx(skeleton.get_bone_rest(right_wrist))
 		and skeleton.get_bone_pose_rotation(skeleton.find_bone("elbow_r")).is_equal_approx(Quaternion.IDENTITY),
 		"pooled creature starts with fresh wrist and elbow poses")
+
+func _hands_reach_forward(skeleton: Skeleton3D) -> bool:
+	for side: int in [-1,1]:
+		var suffix := "l" if side < 0 else "r"
+		var wrist := skeleton.find_bone("hand_"+suffix)
+		var elbow := skeleton.find_bone("elbow_"+suffix)
+		if wrist < 0 or elbow < 0: return false
+		var hand := skeleton.get_bone_global_pose(wrist)
+		var arm := skeleton.get_bone_global_pose(elbow)
+		if hand.origin.z >= arm.origin.z-0.14 or hand.basis.z.z <= 0.60 or hand.origin.x*side <= 0.19:
+			return false
+	return true

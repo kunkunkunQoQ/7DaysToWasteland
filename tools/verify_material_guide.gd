@@ -107,6 +107,7 @@ func run()->void:
 		var scroll:ScrollContainer=g.entries.packed_snow.get_parent().get_parent()
 		check(screen.encloses(g.get_global_rect()) and scroll.get_global_rect().intersects(g.entries.packed_snow.get_global_rect()) and screen.encloses(button("返回背包").get_global_rect()),"list, selected deep row, article and back button fit landscape")
 		audit(g)
+		await settle()
 		await press(button("返回背包"))
 		check(app.panels.active=="bag" and app.panels.selection=="packed_snow","return restores the source bag selection")
 	await press(button("获取方式"))
@@ -123,6 +124,11 @@ func run()->void:
 		check("≥28" in "\n".join(g.sources.random.bike) and not g.sources.stable.bike.is_empty(),"gated chest is separate from guaranteed motorcycle recipe")
 		check("成就" in "\n".join(g.sources.stable.meme_clock) and "地方色赤狐" in "\n".join(g.sources.random.meme_clock),"clock lists achievement and variant-specific rare route")
 		check("工兵铲" in "\n".join(g.sources.stable.sapling_oak) and "感染者巢穴" in "\n".join(g.sources.random.pistol),"sapling recovery and nest loot list the real interactions")
+		var radio_places: PackedStringArray = g.sources.random.electronics
+		check(Array(radio_places).any(func(line): return line.begins_with("无线电检修柜") and "观测塔" in line and "荒原前哨" in line and "指挥所" in line),
+			"radio parts list the lookout, outpost and spillway control room in the same source")
+		check("山麓林场" in "\n".join(g.sources.random.honey) and "回声医院" not in "\n".join(g.sources.random.rifle),
+			"item sources distinguish timber stations and exclude hospital medicine lockers from rifle locations")
 		check("守夜补给" in "\n".join(g.sources.stable.bandage) and "17%" in "\n".join(g.sources.random.bandage),"blood moon supplies and infected rolls stay distinct")
 		search.text="no such item"
 		search.text_changed.emit(search.text)

@@ -347,7 +347,7 @@ func _sweep_actor(id, old: Vector3, feet: Vector3, height: float, radius: float,
 				var speed := omega * (pair[0] - _pivot).slide(_axis).length()
 				if speed >= 1.45:
 					earliest = time
-					point = pair[0]
+					point = pair[1] + pair[1].direction_to(pair[0]) * radius
 					damage = clampf(speed * (2.5 + _radius * 4.0) * float(limb.strength), 3.0, 76.0)
 					break
 				time += 0.003

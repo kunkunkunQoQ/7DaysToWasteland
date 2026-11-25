@@ -5,6 +5,7 @@ const Sculpt := WastelandBestiary.Sculpture
 const HEAD := preload("res://game/art/ranger_head.gd")
 const LIMB := preload("res://game/art/avatar_limb.gd")
 const GEAR_ART := preload("res://game/art/survivor_equipment.gd")
+const ActiveMotion := preload("res://game/actors/active_ragdoll.gd")
 const SURFACE := preload("res://shaders/survivor_surface.gdshader")
 static var body_material: ShaderMaterial
 const OUTFITS := {"ranger":"巡护员","ferryman":"渡工","surveyor":"测绘员","mechanic":"机修工","medic":"急救员","climber":"攀岩者","bronx":"街头混混"}
@@ -86,6 +87,31 @@ var offhand_blend:=0.0
 var preview_mainhand:=""
 var preview_loaded:=false
 var primary_shield:MeshInstance3D
+var motion_world: Node3D
+var active_motion: ActiveMotion
+var first_person_body := false
+
+func configure_live_motion(world: Node3D, first_person := false) -> void:
+	motion_world = world
+	first_person_body = first_person
+	if first_person_body and is_node_ready(): _shadow_meshes(self)
+
+func stop_live_motion() -> void:
+	if is_instance_valid(active_motion): active_motion.stop_driving()
+	active_motion = null
+
+func push_part(impact: Vector3, at: Vector3, bone: StringName = &"") -> void:
+	if is_instance_valid(active_motion): active_motion.kick_at(impact, at, bone)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED and not is_visible_in_tree():
+		stop_live_motion()
+
+func _shadow_meshes(branch: Node) -> void:
+	if branch is GeometryInstance3D:
+		branch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	for mesh: GeometryInstance3D in branch.find_children("*","GeometryInstance3D",true,false):
+		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 
 func set_mainhand(id:String,loaded:=false)->void:
 	preview_mainhand=id
@@ -113,6 +139,7 @@ func set_mainhand(id:String,loaded:=false)->void:
 		prop.scale=Vector3.ONE
 		prop.rotation=Vector3.ZERO
 	grip.add_child(prop)
+	if first_person_body: _shadow_meshes(prop)
 
 func set_offhand(id:String,blocking:=false,lit:=true)->void:
 	var changed:=id!=offhand_id
@@ -129,6 +156,7 @@ func set_offhand(id:String,blocking:=false,lit:=true)->void:
 		offhand_prop=Offhand.prop(id,false)
 		if offhand_prop:
 			left_grip.add_child(offhand_prop)
+			if first_person_body: _shadow_meshes(offhand_prop)
 	if id=="torch" and is_instance_valid(offhand_prop): offhand_prop.get_node("LitGlass").visible=lit
 	Offhand.sync_world_light(left_grip,id,lit)
 	left_open.visible=id.is_empty()
@@ -185,6 +213,7 @@ func _reset_children(parent: Node3D) -> void:
 		child.queue_free()
 
 func _build_body() -> void:
+	stop_live_motion()
 	if jacket.get_parent() != null:
 		_reset_children(pivot)
 		jacket = Node3D.new()
@@ -588,6 +617,10 @@ func _costume(parent:Node3D, id:String, at:Vector3, size:=Vector3.ONE)->void:
 	if parent!=equipment: sleeves.append(piece)
 
 func _dress() -> void:
+	_dress_equipment()
+	if first_person_body: _shadow_meshes(self)
+
+func _dress_equipment() -> void:
 	_reset_children(equipment)
 	undershirt.visible = equipped.is_empty() or equipped in ["sun_cape","meme_duck"]
 	for sleeve in sleeves:
@@ -678,6 +711,20 @@ func act(kind:String) -> void:
 		action_time=0.0
 
 func pose(dt: float, foot_speed: float, duck: float, swimming:bool=false) -> void:
+	if not is_instance_valid(motion_world):
+		_animate_pose(dt, foot_speed, duck, swimming)
+		return
+	if not is_visible_in_tree(): return
+	var drive := ActiveMotion.wanted(motion_world, global_position, active_motion, first_person_body)
+	if is_instance_valid(active_motion):
+		if drive: active_motion.restore_targets()
+		else: stop_live_motion()
+	_animate_pose(dt, foot_speed, duck, swimming)
+	if drive:
+		if not is_instance_valid(active_motion): active_motion = ActiveMotion.start(self, self, motion_world.stream, first_person_body)
+		if is_instance_valid(active_motion): active_motion.capture_targets()
+
+func _animate_pose(dt: float, foot_speed: float, duck: float, swimming:bool=false) -> void:
 	if arms.size()!=2:
 		return
 	var speed:=clampf(foot_speed/4.9,0.0,1.5)

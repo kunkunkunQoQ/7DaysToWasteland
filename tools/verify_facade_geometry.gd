@@ -34,11 +34,17 @@ func run() -> void:
 		check(side.get_child_count() == 2 and visual.mesh.get_surface_count() == 1 and side.get_child(1).shape == back.get_child(1).shape
 			and back.get_child(0).mesh == visual.mesh and solids.size()<rendered.size() and solids==rendered.slice(0,solids.size()),
 			c.site + " matching bays share one mesh and collider with cosmetic interior linings excluded from physics")
+		var finish := visual.material_override as ShaderMaterial
+		check(finish != null and finish.shader == preload("res://shaders/site_weathering.gdshader")
+			and finish == back.get_child(0).material_override, c.site + " adjoining bays share their weathered finish")
 		var family := "outpost" if c.site == "lodge" and c.cell != WastelandSite.SHORE_CELL else c.site
 		var signature := hash([visual.mesh.get_faces(),visual.mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]])
 		if facades.has(family):
 			check(facades[family] == signature,family + " facade is stable across cells")
 		facades[family] = signature
+		if c.site in ["lodge","cabin"]:
+			await physics_frame
+			_check_roof_tear(c)
 		if c.site in ["garage","granary"]:
 			var key := "roof/plate/1/3"
 			var section: Array = c.structures[key].duplicate()
@@ -51,3 +57,18 @@ func run() -> void:
 	await close_world()
 	print("FACADE QA passed=%d failed=%d" % [passed, failures])
 	quit(1 if failures else 0)
+
+func _check_roof_tear(c: WastelandChunk) -> void:
+	var bay := 1 if c.ruin.end < 0 else 3
+	var panels: Array = c.structures["roof/timber/1/%d" % bay]
+	var panel: StaticBody3D = panels[0]
+	var depth: float = c.ruin.span / 5.0
+	var x: float = 16 + c.ruin.span * 0.5 + WastelandSite.ROOF_OVERHANG - 0.15
+	var start := c.to_global(Vector3(x,c.ruin.base_y + 5.0,16 + (bay - 2) * depth))
+	var space := c.get_world_3d().direct_space_state
+	var torn := start + Vector3.BACK * depth * 0.31
+	var mended := start - Vector3.BACK * depth * 0.31
+	var gap := space.intersect_ray(PhysicsRayQueryParameters3D.create(torn,torn + Vector3.DOWN * 2.5,2))
+	var tin := space.intersect_ray(PhysicsRayQueryParameters3D.create(mended,mended + Vector3.DOWN * 2.5,2))
+	check(panels.size() == 1 and panel.get_child(0).mesh.get_surface_count() == 1 and gap.is_empty() and tin.get("collider") == panel,
+		c.site + " folded and missing sheets share one draw surface and the actual eave tear is open")

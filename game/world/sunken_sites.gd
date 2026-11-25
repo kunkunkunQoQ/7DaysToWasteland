@@ -218,7 +218,9 @@ static func _ferry(chunk:WastelandChunk,ruin:Node3D,frame:WreckFrame) -> void:
 					continue
 				var h := plank / 6.0
 				var h2 := (plank + 0.93) / 6.0
-				_quad(b, _hull_point(t,h,side), _hull_point(t2,h,side), _hull_point(t2,h2,side), _hull_point(t,h2,side), OAK.lightened((section + plank * 2) % 4 * 0.09))
+				var grain := OAK.lightened((section + plank * 2) % 4 * 0.09)
+				var silt := clampf(0.82 - h + 0.13 * sin(section * 1.6) - side * 0.23, 0.0, 0.86)
+				_quad(b, _hull_point(t,h,side), _hull_point(t2,h,side), _hull_point(t2,h2,side), _hull_point(t,h2,side), grain.lerp(Color("#69745e"),silt))
 			if section>=6:
 				_quad(b,_hull_point(t,0.78,side)+Vector3.RIGHT*side*0.023,_hull_point(t2,0.78,side)+Vector3.RIGHT*side*0.023,
 					_hull_point(t2,0.82,side)+Vector3.RIGHT*side*0.023,_hull_point(t,0.82,side)+Vector3.RIGHT*side*0.023,Color("#83a8a0"))
@@ -292,7 +294,10 @@ static func _pump(chunk:WastelandChunk,ruin:Node3D,frame:WreckFrame) -> void:
 			var ray:=Vector3(cos(a),sin(a),0)
 			var beside:=Vector3(cos(next),sin(next),0)
 			var lip:=Vector3.BACK*0.25
-			_quad(fittings,flange+ray*0.83+lip,flange+beside*0.83+lip,flange+beside*0.98+lip,flange+ray*0.98+lip,RUST.darkened(0.08))
+			# Deposits collect on the lower lip of the idle intake.
+			var crust := smoothstep(-0.25, 0.95, -ray.y) * (0.51 + 0.21 * sin(i * 2.4 + x))
+			var oxide := RUST.darkened(0.08).lerp(Color("#adb098"),crust)
+			_quad(fittings,flange+ray*0.83+lip,flange+beside*0.83+lip,flange+beside*0.98+lip,flange+ray*0.98+lip,oxide)
 			_quad(fittings,flange+ray*0.98,flange+ray*0.98+lip,flange+beside*0.98+lip,flange+beside*0.98,IRON)
 			if i%2==0:
 				var stud:=flange+lip+ray*0.91
@@ -376,7 +381,9 @@ static func _bridge(chunk:WastelandChunk,ruin:Node3D,frame:WreckFrame) -> void:
 		_quad(b,face[0]+depth,face[1]+depth,face[2]+depth,face[3]+depth,stone)
 		for n in 4:
 			var m := (n+1)%4
-			_quad(b,face[n],face[m],face[m]+depth,face[n]+depth,stone.darkened(0.10))
+			var edge_tone := stone.darkened(0.10)
+			if n == 1: edge_tone = edge_tone.lerp(Color("#777e5f"),0.56)
+			_quad(b,face[n],face[m],face[m]+depth,face[n]+depth,edge_tone)
 		var stone_id := frame.prefix+"arch/"+str(i)
 		var facing:=WastelandScenery.new(530+i)
 		# A recessed joint surrounds each stone face. The projecting crown was dressed separately.
@@ -388,6 +395,14 @@ static func _bridge(chunk:WastelandChunk,ruin:Node3D,frame:WreckFrame) -> void:
 			var inner_m:=face[m].lerp(face_center,0.20)+projection
 			_quad(facing,face[n]+Vector3.BACK*0.004,face[m]+Vector3.BACK*0.004,inner_m,inner_n,stone.lightened(0.13) if n==2 else stone.darkened(0.13))
 			facing.triangle(inner_n,inner_m,face_center+projection,Vector3.BACK,stone.lightened(0.19 if i==6 else 0.04))
+		if i in [2,3,7,8,11]:
+			# A mineral bloom starts at the outer mortar seam and narrows as
+			# it runs down the raised face of the stone.
+			var lip := Vector3.BACK * 0.061
+			var left_edge := face[1].lerp(face[2],0.36).lerp(face_center,0.22) + lip
+			var right_edge := face[1].lerp(face[2],0.63).lerp(face_center,0.22) + lip
+			var toe := face_center.lerp(face[3],0.30) + lip
+			facing.triangle(left_edge,right_edge,toe,Vector3.BACK,Color("#c0bbaa").darkened(0.05*(i%3)))
 		_section(chunk,ruin,b.commit(),stone_id,230,facing)
 		if i==0 or i==12:
 			frame.joint(stone_id,crowns[1 if i==0 else -1])

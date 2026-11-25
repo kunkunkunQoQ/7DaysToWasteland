@@ -13,7 +13,8 @@ static func spawn(chunk: WastelandChunk, local_id: String, table: String, point:
 	if chunk.stream.generator.site_revision>0:
 		finish=1+posmod(chunk.stream.generator.seed_at(chunk.cell,0x3511)^local_id.hash(),8)
 	body.set_meta("finish_variant",finish)
-	model.configure(profile,table,finish)
+	var badge: String = chunk.stream.catalog.loot[table].get("badge",table) if meta.get("building_cache",false) else table
+	model.configure(profile,badge,finish)
 	var key: String = body.get_meta("key")
 	chunk.supply_caches[key] = model
 	chunk.sync_cache(key,false)

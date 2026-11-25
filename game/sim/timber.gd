@@ -249,7 +249,7 @@ func _strike(id: Variant, damage: float, point: Vector3, key: String) -> void:
 	records[key].victims[id] = true
 	if id is int:
 		var actor: WastelandCreature = session.hordes.actors_by_serial.get(id)
-		if is_instance_valid(actor): actor.take_hit(damage,point,damage>=16.0)
+		if is_instance_valid(actor): actor.take_hit(damage,point,damage>=16.0,false,point)
 	else:
 		var player:WastelandSurvivor
 		if id=="host":
@@ -258,7 +258,7 @@ func _strike(id: Variant, damage: float, point: Vector3, key: String) -> void:
 			var state:WastelandLan.MemberState=session.network.member_with_token(str(id).trim_prefix("guest/"))
 			if state!=null: player=state.survivor
 		if is_instance_valid(player):
-			player.damage(damage,"timber",point)
+			player.damage(damage,"timber",point,point)
 
 func _brush(point: Vector3, key: String) -> void:
 	var model: String = records[key].cut.model

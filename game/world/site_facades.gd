@@ -20,7 +20,8 @@ static func bay(chunk: WastelandChunk, point: Vector3, orientation: Basis, width
 	var corner := index in [0, 4]
 	var hand := -1 if index < 2 else 1
 	var front := side == 0
-	var key := [style, width, crown, corner, hand, front, door, window, index == 2, tint, trim]
+	var worn := (index == 1 and front and level % 2 == 0) or (index == 3 and not front and crown) or (corner and ((index == 4 and crown) or (index == 0 and level == 0)))
+	var key := [style, width, crown, corner, hand, front, door, window, index == 2, tint, trim, worn]
 	if not models.has(key):
 		var parts: Array = []
 		var apron := trim.darkened(0.13)
@@ -36,10 +37,12 @@ static func bay(chunk: WastelandChunk, point: Vector3, orientation: Basis, width
 			parts.append([Vector3(0, 1.045, 0.07), Vector3(width - 0.01, 0.10, 0.27), trim])
 			parts.append([Vector3(0, 2.13, 0.03), Vector3(width, 0.10, 0.16), trim])
 		if timber:
-			_timber(parts, style, width, tint, door, window, corner, hand)
+			_timber(parts, style, width, tint, door, window, corner, hand, worn)
 		else:
-			_masonry(parts, style, width, door, window, crown, corner, hand, front, index == 2)
+			_masonry(parts, style, width, door, window, crown, corner, hand, front, index == 2, worn)
 		var solid_count := parts.size()
+		if worn and not door:
+			_exposed_wall(parts,style,width,hand,window,corner)
 		_room_face(parts,style,width,door,window,corner,hand,tint)
 		var mesh := preload("res://game/world/building_mesh.gd").boxes(parts)
 		var volume := 0.0
@@ -72,7 +75,7 @@ static func bay(chunk: WastelandChunk, point: Vector3, orientation: Basis, width
 		chunk.obstacles.append(body)
 	chunk.track_structure(body, "wall/%d/%d/%d" % [level, side, index], 205 if style in ["lodge","outpost","cabin"] else 480)
 
-static func _timber(parts: Array, style: String, width: float, tint: Color, door: bool, window: bool, corner: bool, hand: int) -> void:
+static func _timber(parts: Array, style: String, width: float, tint: Color, door: bool, window: bool, corner: bool, hand: int, worn: bool) -> void:
 	var paint := Color("#517b82") if style == "lodge" else GREEN if style == "outpost" else Color("#916443")
 	if door:
 		parts.append([Vector3(0, 2.79, 0.06), Vector3(width, 0.14, 0.19), paint])
@@ -82,7 +85,13 @@ static func _timber(parts: Array, style: String, width: float, tint: Color, door
 		var y := 0.24 + course * 0.415
 		if window and y > 1.02 and y < 2.16: continue
 		var shade := tint.lerp(TIMBER, 0.12 + 0.09 * (course % 3))
-		parts.append([Vector3(0, y, -0.005), Vector3(width - 0.014, 0.405, 0.059), shade, Basis(Vector3.RIGHT, -0.06)])
+		if worn and course in [0,1,5]:
+			var split := width * (0.24 + 0.07 * (course % 3))
+			parts.append([Vector3(-hand * split * 0.5, y, -0.005), Vector3(width - split, 0.405, 0.059), shade, Basis(Vector3.RIGHT, -0.06)])
+			if course != 0:
+				parts.append([Vector3(hand * (width - split) * 0.5, y - 0.018, 0.006), Vector3(split - 0.035, 0.32, 0.067), TIMBER.lerp(Color("#a39982"), 0.52), Basis(Vector3.BACK, -hand * 0.06)])
+		else:
+			parts.append([Vector3(0, y, -0.005), Vector3(width - 0.014, 0.405, 0.059), shade, Basis(Vector3.RIGHT, -0.06)])
 	if corner:
 		parts.append([Vector3(hand * (width * 0.5 - 0.11), 1.49, 0.075), Vector3(0.19, 2.91, 0.14), paint])
 	if window:
@@ -95,33 +104,45 @@ static func _timber(parts: Array, style: String, width: float, tint: Color, door
 			parts.append([Vector3(0, 2.21, 0.11), Vector3(width, 0.10, 0.37), TIMBER, Basis(Vector3.RIGHT, 0.12)])
 		else:
 			parts.append([Vector3(0, 1.89, 0), Vector3(width - 0.15, 0.063, 0.085), paint])
+		if worn:
+			# A pair of salvaged offcuts fixed to the shutter stile and the surviving mullion.
+			var reach := width * 0.53
+			for row in 2:
+				var cant := Basis(Vector3.BACK, hand * (0.19 if row == 0 else -0.06))
+				parts.append([Vector3(hand * width * 0.19,1.38 + row * 0.31,0.17),Vector3(reach,0.13 + row * 0.025,0.053),TIMBER.lerp(Color("#b2a18a"),0.64 - row * 0.29),cant])
 
 static func _masonry(parts: Array, style: String, width: float, door: bool, window: bool,
-		crown: bool, corner: bool, hand: int, front: bool, middle: bool) -> void:
+		crown: bool, corner: bool, hand: int, front: bool, middle: bool, worn: bool) -> void:
+	var chip := hand if worn and corner and not door else 0
 	match style:
 		"hospital":
 			parts.append([Vector3(0, 0.76 if not door else 2.78, 0.018), Vector3(width, 0.22, 0.075), GREEN])
 			if window:
-				var slope := Basis(Vector3.RIGHT, 0.15)
+				var slope := Basis(Vector3.BACK,0.073 * hand if worn else 0.0) * Basis(Vector3.RIGHT, 0.15)
 				parts.append([Vector3(0, 2.29, 0.19), Vector3(width - 0.06, 0.10, 0.52), IVORY, slope])
 				for x: int in [-1, 1]:
 					parts.append([Vector3(x * width * 0.36, 2.18, 0.12), Vector3(0.055, 0.067, 0.35), GREEN, Basis(Vector3.RIGHT, -0.48)])
-			if crown: _coping(parts, width, 0.25, IVORY)
+			if crown: _coping(parts, width, 0.25, IVORY,chip)
 		"police":
 			parts.append([Vector3(0, 2.79, 0.022), Vector3(width, 0.23, 0.10), Color("#3a5068")])
 			if window:
 				for bar in 4:
-					parts.append([Vector3((bar - 1.5) * width * 0.195, 1.58, 0.045), Vector3(0.048, 1.05, 0.07), STEEL])
+					var x := (bar - 1.5) * width * 0.195
+					if worn and bar == 1:
+						parts.append([Vector3(x + 0.047,1.94,0.073),Vector3(0.048,0.43,0.07),RUST,Basis(Vector3.BACK,0.23)])
+						parts.append([Vector3(x - 0.069,1.26,0.081),Vector3(0.05,0.46,0.07),RUST,Basis(Vector3.BACK,0.32)])
+					else:
+						parts.append([Vector3(x, 1.58, 0.045), Vector3(0.048, 1.05, 0.07), STEEL])
 				parts.append([Vector3(0, 1.54, 0.065), Vector3(width - 0.12, 0.06, 0.08), STEEL])
 			elif corner and not door:
 				parts.append([Vector3(hand * (width * 0.5 - 0.16), 1.52, 0), Vector3(0.29, 2.91, 0.23), Color("#778595")])
-			if crown: _coping(parts, width, 0.30, STEEL)
+			if crown: _coping(parts, width, 0.30, STEEL,chip)
 		"bunker":
 			if corner and not door:
 				parts.append([Vector3(hand * width * 0.31, 1.4, 0.10), Vector3(0.49, 2.77, 0.40), Color("#627368"), Basis.IDENTITY, 0.72])
 			if door or crown:
 				parts.append([Vector3(0, 2.83, 0.027), Vector3(width, 0.15, 0.14), STEEL])
-			if crown: _coping(parts, width, 0.19, Color("#677b72"))
+			if crown: _coping(parts, width, 0.19, Color("#677b72"),chip)
 		"tower":
 			if crown:
 				parts.append([Vector3(0, 2.98, 0.065), Vector3(width, 0.21, 0.29), Color("#b19676")])
@@ -134,23 +155,31 @@ static func _masonry(parts: Array, style: String, width: float, door: bool, wind
 			parts.append([Vector3(0, 2.80, 0.017), Vector3(width, 0.22, 0.09), RED])
 			if window:
 				parts.append([Vector3(0, 2.20, 0.13), Vector3(width, 0.11, 0.35), IVORY])
-			if crown: _coping(parts, width, 0.15, IVORY)
+			if crown: _coping(parts, width, 0.15, IVORY,chip)
 		"granary":
 			if window:
 				for slat in 4:
-					parts.append([Vector3(0, 1.21 + slat * 0.24, 0.023), Vector3(width - 0.14, 0.12, 0.16), TIMBER, Basis(Vector3.RIGHT, 0.24)])
+					if worn and slat == 1: continue
+					var tilt := Basis(Vector3.BACK,0.11 * hand if worn and slat == 2 else 0.0) * Basis(Vector3.RIGHT,0.24)
+					parts.append([Vector3(0, 1.21 + slat * 0.24, 0.023), Vector3(width - 0.14, 0.12, 0.16), TIMBER, tilt])
 			elif not door:
 				for i in 3:
 					parts.append([Vector3((i - 1) * width * 0.35, 1.49, 0.018), Vector3(0.077, 2.85, 0.105), Color("#967a50")])
-			if crown: _coping(parts, width, 0.19, TIMBER)
+			if crown: _coping(parts, width, 0.19, TIMBER,chip)
 		"garage":
 			if front and corner and not door:
 				parts.append([Vector3(0, 1.41, 0.011), Vector3(width - 0.20, 2.42, 0.085), STEEL])
 				for slat in 6:
-					parts.append([Vector3(0, 0.42 + slat * 0.39, 0.065), Vector3(width - 0.22, 0.066, 0.064), Color("#778588")])
+					if worn and slat in [0,1]:
+						# A crush at wheel height kinks the shutter ribs out from the sheet.
+						for half: int in [-1,1]:
+							var bend := Basis(Vector3.UP,half * 0.16)
+							parts.append([Vector3(half * (width - 0.22) * 0.25,0.42 + slat * 0.39,0.11),Vector3((width - 0.22) * 0.50,0.069,0.065),RUST,bend])
+					else:
+						parts.append([Vector3(0, 0.42 + slat * 0.39, 0.065), Vector3(width - 0.22, 0.066, 0.064), Color("#778588")])
 			elif window:
 				parts.append([Vector3(0, 1.72, 0), Vector3(width, 0.08, 0.075), STEEL])
-			if crown: _coping(parts, width, 0.17, RUST)
+			if crown: _coping(parts, width, 0.17, RUST,chip)
 		"post":
 			if window:
 				parts.append([Vector3(0, 1.86, -0.012), Vector3(width - 0.13, 0.062, 0.085), RED])
@@ -160,11 +189,57 @@ static func _masonry(parts: Array, style: String, width: float, door: bool, wind
 					parts.append([Vector3(hand * (width * 0.5 - 0.16), 0.37 + course * 0.69, 0.016), Vector3(0.31, 0.28, 0.15), IVORY.darkened(0.10)])
 			if crown:
 				var rise := (0.62 if middle else 0.36) if front and not corner else 0.17
-				_coping(parts, width, rise, RED)
+				_coping(parts, width, rise, RED,chip)
 
-static func _coping(parts: Array, width: float, rise: float, tone: Color) -> void:
+static func _coping(parts: Array, width: float, rise: float, tone: Color, chip: int) -> void:
+	if chip != 0:
+		var intact := width * 0.66
+		parts.append([Vector3(-chip * (width - intact) * 0.5,3.03 + rise * 0.5,-0.045),Vector3(intact,rise,0.23),tone.darkened(0.09)])
+		parts.append([Vector3(-chip * width * 0.21,3.06 + rise,-0.045),Vector3(width * 0.58,0.07,0.31),tone])
+		parts.append([Vector3(chip * width * 0.245,3.03 + rise * 0.28,-0.04),Vector3(width * 0.18,rise * 0.58,0.23),tone.lerp(RUST,0.38),Basis(Vector3.BACK,-chip * 0.07)])
+		return
 	parts.append([Vector3(0, 3.03 + rise * 0.5, -0.045), Vector3(width, rise, 0.23), tone.darkened(0.09)])
 	parts.append([Vector3(0, 3.06 + rise, -0.045), Vector3(width, 0.07, 0.31), tone])
+
+# Millimetre-thick fragments sit on the rendered face and leave the existing wall collider intact.
+static func _exposed_wall(parts: Array, style: String, width: float, hand: int, window: bool, corner: bool) -> void:
+	if style in ["lodge","outpost","cabin"]:
+		if corner:
+			var x := hand * (width * 0.5 - 0.11)
+			var strap := Vector3(x,0.68,0.157)
+			parts.append([strap,Vector3(0.21,0.52,0.021),STEEL.lerp(RUST,0.52),Basis(Vector3.BACK,hand * 0.023)])
+			for y: float in [-0.18,0.18]:
+				parts.append([strap + Vector3(0,y,0.017),Vector3(0.048,0.048,0.023),STEEL.darkened(0.18)])
+		return
+	if style in ["garage","granary"]:
+		# A cut piece of galvanized sheet bridges a corroded panel on the service side.
+		if not window: return
+		var patch := Vector3(hand * width * 0.22,0.54,0.018)
+		var tilt := Basis(Vector3.BACK,hand * 0.055)
+		parts.append([patch,Vector3(width * 0.42,0.55,0.042),Color("#8b8e7d"),tilt])
+		for fold in 3:
+			parts.append([patch + tilt * Vector3((fold - 1) * width * 0.12,0,0.024),Vector3(0.045,0.53,0.026),Color("#776e57"),tilt])
+		return
+	var brick := style in ["hospital","post","fuel"]
+	var x := -hand * width * 0.16
+	var y := 0.30 if window else 1.07
+	var surface_z := -0.014
+	if brick:
+		# Staggered bed joints disappear progressively under surviving render.
+		for row in 3:
+			var count := 3 - row
+			var start := x - hand * width * 0.18 + hand * (row % 2) * 0.15
+			for column in count:
+				var p := Vector3(start + hand * column * 0.33,y + row * 0.133,surface_z + (row % 2) * 0.002)
+				var fired := Color("#846647").lerp(Color("#9d644c"),0.21 + 0.23 * ((row + column) % 3))
+				parts.append([p,Vector3(0.31,0.123,0.034),fired,Basis.IDENTITY,0.94])
+	else:
+		var patch := Vector3(x,y + 0.12,surface_z)
+		var core := Color("#776e5f")
+		parts.append([patch,Vector3(0.86,0.39,0.035),core,Basis(Vector3.BACK,hand * 0.13),0.73])
+		parts.append([patch + Vector3(hand * 0.28,0.15,0.002),Vector3(0.31,0.36,0.036),core,Basis(Vector3.BACK,-hand * 0.12),0.44])
+		for bar in 2:
+			parts.append([patch + Vector3(0,bar * 0.112 - 0.072,0.024),Vector3(0.62 - bar * 0.17,0.024,0.033),RUST.darkened(0.24),Basis(Vector3.BACK,0.025)])
 
 static func _room_face(parts: Array, style: String, width: float, door: bool, window: bool, corner: bool, hand: int, tint: Color) -> void:
 	# The outside face of a structural bay is at 0; the inside face is -0.317.
@@ -298,13 +373,27 @@ static func gable_face(builder: WastelandScenery, half: float, rise: float, tint
 		var c := Vector3(-top, high * rise, z)
 		var d := Vector3(top, high * rise, z)
 		var color := tint.lerp(TIMBER, 0.10 + 0.14 * (row % 3))
-		builder.triangle(a,b,c,normal,color)
-		builder.triangle(c,b,d,normal,color)
+		if row in [1,2] and top > 0.85:
+			# Faded replacement lengths butt into the old courses at two staggered joints.
+			var joint := side * minf(top * 0.72,0.62 + 0.43 * row)
+			var lower := Vector3(joint,a.y,z)
+			var upper := Vector3(joint,c.y,z)
+			var old_wood := tint.lerp(Color("#9c8d77"),0.53 + 0.12 * row)
+			var left_tone := old_wood if side < 0 else color
+			var right_tone := old_wood if side > 0 else color
+			builder.triangle(a,lower,c,normal,left_tone)
+			builder.triangle(c,lower,upper,normal,left_tone)
+			builder.triangle(lower,b,upper,normal,right_tone)
+			builder.triangle(upper,b,d,normal,right_tone)
+		else:
+			builder.triangle(a,b,c,normal,color)
+			builder.triangle(c,b,d,normal,color)
 	var vent_y := rise * 0.43
 	var at := Vector3(0, vent_y, z + side * 0.007)
 	_gable_board(builder, at, Vector2(0.99,0.54), normal, TIMBER.darkened(0.52))
 	for slat in 3:
-		_gable_board(builder,at + Vector3(0, -0.18 + 0.17 * slat, side * 0.008),Vector2(0.89,0.082),normal,tint.lightened(0.12))
+		var length := 0.54 if slat == 1 else 0.89
+		_gable_board(builder,at + Vector3(side * (0.89 - length) * 0.5, -0.18 + 0.17 * slat, side * 0.008),Vector2(length,0.082),normal,tint.lightened(0.12))
 
 static func _gable_board(builder: WastelandScenery, at: Vector3, size: Vector2, normal: Vector3, tone: Color) -> void:
 	var across := Vector3.RIGHT * size.x * 0.5

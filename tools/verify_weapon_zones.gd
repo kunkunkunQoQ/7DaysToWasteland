@@ -41,6 +41,8 @@ func run()->void:
 		check(s.player.confirmed_head==(zone=="head"),"shooter receives matching confirmation")
 		tested[zone]=true
 	check(tested.size()==3,"three independently hittable regions")
+	check(actor.hand_impact_damage("torso",at) == 0,"ordinary infected expose their torso to a punch")
+	await check_hard_cover(s,at+Vector3.RIGHT*5)
 	var wall:=StaticBody3D.new()
 	wall.collision_layer=2
 	s.add_child(wall)
@@ -85,3 +87,58 @@ func run()->void:
 	await process_frame
 	print("WEAPON ZONE FAILURES ",errors)
 	quit(int(errors>0))
+
+func check_hard_cover(session: WastelandSession, at: Vector3) -> void:
+	session.hordes._spawn("walker",at,false,{"morph":"armored","limb_index":0})
+	var plated: WastelandCreature = session.hordes.alive.back()
+	check(plated.hand_impact_damage("torso",at) == 4 and plated.hand_impact_damage("head",at) == 0 and plated.hand_impact_damage("legs",at) == 0,
+		"mutation plates protect the torso and arms while exposing the head and legs")
+	await physics_frame
+	await physics_frame
+	check_punch(session,plated,"torso",Vector3.BACK,4.0,"punching the plated torso costs four health")
+	check_punch(session,plated,"head",Vector3.BACK,0.0,"punching the exposed head spares the hand")
+	session.hordes.release(plated)
+	check(plated.hand_impact_damage("torso",at) == 0,"inactive plated infected cannot bruise a fist")
+	for limb_index: int in [0,2,8]:
+		session.hordes._spawn("bulwark",at,false,{"facing":0.0,"limb_index":limb_index})
+		var guard: WastelandCreature = session.hordes.alive.back()
+		var front := at + Vector3.FORWARD
+		var pieces := int(guard.limb_damage.x < 2) + int(guard.limb_damage.y < 2)
+		check(guard.hand_impact_damage("torso",front) == (4 if pieces > 0 else 0) and guard.hand_impact_damage("torso",at + Vector3.BACK) == 0,
+			"bulwark guards only its front with %d remaining plates" % pieces)
+		await physics_frame
+		await physics_frame
+		check_punch(session,guard,"torso",Vector3.FORWARD,4.0 if pieces > 0 else 0.0,
+			"frontal punch meets %d remaining shield plates" % pieces)
+		check_punch(session,guard,"torso",Vector3.BACK,0.0,"a punch from behind clears the shield")
+		var before := guard.hp
+		guard.take_hit(10.0,front)
+		check(is_equal_approx(before - guard.hp,10.0 * (1.0 - 0.35 * pieces)),
+			"light weapon damage still accounts for %d shield plates" % pieces)
+		before = guard.hp
+		guard.take_hit(10.0,front,true)
+		check(is_equal_approx(before - guard.hp,10.0 * (1.0 - 0.16 * pieces)),
+			"heavy weapon damage still accounts for %d shield plates" % pieces)
+		guard.brain.action = WastelandCreatureBrain.Action.MELEE
+		check(guard.hand_impact_damage("torso",front) == 0,"the bulwark opens its shield during windup")
+		guard.brain.action = WastelandCreatureBrain.Action.NONE
+		guard.attack = 0.3
+		check(guard.hand_impact_damage("torso",front) == 0,"the bulwark opens its shield during a strike")
+		session.hordes.release(guard)
+
+func check_punch(session: WastelandSession, actor: WastelandCreature, zone: String, side: Vector3, injury: float, detail: String) -> void:
+	var player := session.player
+	var camera := player.camera
+	var old_location := player.global_position
+	var old_pose := camera.transform
+	var area: Area3D = actor.hurtboxes.areas[zone]
+	var target := (area.get_child(0) as CollisionShape3D).global_position
+	player.global_position = actor.global_position + side * 1.5
+	camera.global_position = target + side * 1.5
+	camera.look_at(target)
+	var health := player.health
+	var enemy_hp := actor.hp
+	session._melee({},1.0)
+	check(actor.hp < enemy_hp and is_equal_approx(health - player.health,injury),detail)
+	player.global_position = old_location
+	camera.transform = old_pose

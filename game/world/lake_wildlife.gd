@@ -1,6 +1,25 @@
 class_name WastelandLakeWildlife
 extends Node3D
 
+signal impact_changed
+const LakeCombat := preload("res://game/world/lake_combat.gd")
+const ActiveMotion := preload("res://game/actors/active_ragdoll.gd")
+var combat := LakeCombat.new()
+var drivers := {}
+var individual_fish := {}
+
+func weapon_hit(from: Vector3, to: Vector3) -> Dictionary:
+	return combat.weapon_hit(self, from, to)
+
+func strike(hit: Dictionary, damage: float, origin: Vector3, heavy := false) -> bool:
+	return combat.strike(self, hit, damage, origin, heavy)
+
+func combat_snapshot() -> Dictionary:
+	return combat.snapshot()
+
+func restore_combat(rows: Dictionary) -> void:
+	combat.restore(self, rows)
+
 const SCHOOL_SIZE := 6
 const FLIGHT_TIME := 3.6
 const WATCH_RANGE := 78.0
@@ -39,6 +58,10 @@ class Habitat:
 	var rings: MultiMeshInstance3D
 	var dart := 0.0
 	var swim_angle := 0.0
+	var heron_id := ""
+	var fish_ids: Array[String] = []
+	var fish_poses: Array[Transform3D] = []
+	var in_range := false
 
 var habitats: Array[Habitat] = []
 var inland:Dictionary={}
@@ -91,6 +114,7 @@ func configure(owner_stream: WastelandStream) -> void:
 			add_child(animal)
 			animal.build(species,"local" if (i==1 and turtle) or (i==2 and not turtle) else "",_face_at(home,species,0))
 			animal.anchor = home
+			animal.set_meta("lake_id", combat.identity(species, home))
 			animal.position = home
 			animal.phase = i*1.93 + (0.45 if turtle else 1.18)
 			animal.hide()
@@ -133,6 +157,7 @@ func _load_inland(cell:Vector2i)->void:
 		var species:="pond_turtle" if (roll+i)%2==0 else "crayfish"
 		specimen.build(species,"local" if (roll+i)%5==0 else "",_face_at(at,species,i))
 		specimen.anchor=at
+		specimen.set_meta("lake_id", combat.identity(species, at))
 		specimen.position=at
 		specimen.phase=fposmod(roll*0.13+i*1.37,TAU)
 		specimen.hide()
@@ -161,14 +186,18 @@ func _unload_inland(cell:Vector2i)->void:
 	var row:Dictionary=inland[cell]
 	var patch:Habitat=row.patch
 	if patch:
+		_drop_driver(patch.heron_id)
+		for id in patch.fish_ids: _drop_driver(id)
 		habitats.erase(patch)
 		for instance:Node3D in [patch.bird,patch.school,patch.rings]: instance.queue_free()
 	for animal:WastelandBenthicAnimal in row.animals:
+		_drop_driver(animal.get_meta("lake_id"))
 		bottom_life.erase(animal)
 		animal.queue_free()
 	inland.erase(cell)
 
 func _mount_habitat(patch:Habitat)->void:
+	patch.heron_id = combat.identity("heron", patch.perches[0])
 	add_child(patch.bird)
 	patch.bird.position = patch.perches[0]
 	patch.bird.rotation.y = patch.phase
@@ -189,6 +218,8 @@ func _mount_habitat(patch:Habitat)->void:
 	# Stable school-member IDs allow one instanced draw per face, even after chunk reload.
 	var counts:=[0,0]
 	for i in SCHOOL_SIZE:
+		patch.fish_ids.append(combat.identity("lake_fish", patch.fishes, i))
+		patch.fish_poses.append(Transform3D(Basis.IDENTITY, Vector3.INF))
 		var face_index:=_face_at(patch.fishes,"lake_fish",i)
 		patch.face_slots.append(Vector2i(face_index,counts[face_index]))
 		counts[face_index]+=1
@@ -240,6 +271,7 @@ func _process(delta: float) -> void:
 			eyes.append_array(session.guest_positions())
 		elif session.replica:
 			eyes.append_array(network.replica_positions())
+	combat.advance(self, now, eyes)
 	var nearby := false
 	for patch in habitats:
 		var nearest := eyes[0]
@@ -247,26 +279,110 @@ func _process(delta: float) -> void:
 			if at.distance_squared_to(patch.fishes) < nearest.distance_squared_to(patch.fishes):
 				nearest = at
 		var in_range := nearest.distance_squared_to(patch.fishes) < WATCH_RANGE * WATCH_RANGE
-		var rendered := eyes[0].distance_squared_to(patch.fishes) < WATCH_RANGE * WATCH_RANGE and stream.at_surface(patch.fishes)
-		patch.bird.visible = rendered
+		patch.in_range = in_range
+		var simulation_ready := in_range and stream.at_surface(patch.fishes)
+		var rendered := eyes[0].distance_squared_to(patch.fishes) < WATCH_RANGE * WATCH_RANGE and simulation_ready
+		patch.bird.visible = rendered and not combat.absent(patch.heron_id)
 		patch.school.visible = rendered
 		patch.rings.visible = false
 		if not in_range:
+			_drop_driver(patch.heron_id)
+			for id in patch.fish_ids: _drop_driver(id)
 			continue
 		nearby = true
-		_update_heron(patch, eyes, now)
+		if not combat.absent(patch.heron_id):
+			_restore_targets(patch.heron_id)
+			_update_heron(patch, eyes, now)
+			patch.bird.position = combat.rejoin(patch.heron_id, patch.bird.position, now)
+			_drive(patch.heron_id, patch.upper.bones, simulation_ready)
+		else:
+			_drop_driver(patch.heron_id)
 		_update_school(patch, nearest, now, step, rendered)
+		_drive_school(patch, nearest, simulation_ready, rendered)
 	for animal in bottom_life:
 		var closest := eyes[0]
 		for at in eyes:
 			if at.distance_squared_to(animal.anchor)<closest.distance_squared_to(animal.anchor):
 				closest = at
-		animal.visible = eyes[0].distance_squared_to(animal.anchor)<45.0*45.0 and stream.at_surface(animal.anchor)
+		var id: String = animal.get_meta("lake_id")
+		animal.visible = not combat.absent(id) and eyes[0].distance_squared_to(animal.anchor)<45.0*45.0 and stream.at_surface(animal.anchor)
 		if closest.distance_squared_to(animal.anchor)<45.0*45.0:
 			nearby = true
-			animal.advance(stream,closest,now,step)
+			if not combat.absent(id):
+				_restore_targets(id)
+				animal.advance(stream,closest,now,step)
+				animal.position = combat.rejoin(id, animal.position, now)
+				_drive(id, animal.bones, stream.at_surface(animal.anchor))
+			else:
+				_drop_driver(id)
+		else:
+			_drop_driver(id)
+			animal.active_pose = false
 	if not nearby:
 		countdown = 0.6
+
+func _restore_targets(id: String) -> void:
+	if drivers.has(id): drivers[id].restore_targets()
+
+func _drive(id: String, skeleton: Skeleton3D, simulation_ready: bool, already_wanted := false) -> void:
+	var existing: Node3D = drivers.get(id)
+	if not simulation_ready or (not already_wanted and not ActiveMotion.wanted(session, skeleton.global_position, existing)):
+		_drop_driver(id)
+	elif existing == null:
+		var drive: Node3D = ActiveMotion.start(skeleton.get_parent(), skeleton, stream)
+		if drive != null: drivers[id] = drive
+	else:
+		existing.capture_targets()
+
+func _drop_driver(id: String) -> void:
+	if drivers.has(id):
+		drivers[id].stop_driving()
+		drivers.erase(id)
+	if individual_fish.has(id):
+		var model: Node3D = individual_fish[id].model
+		model.hide()
+		model.queue_free()
+		individual_fish.erase(id)
+
+func _drive_school(patch: Habitat, eye: Vector3, simulation_ready: bool, rendered: bool) -> void:
+	var nearest := -1
+	var distance := 12.0 * 12.0
+	if simulation_ready:
+		for i in patch.fish_ids.size():
+			var point := patch.fish_poses[i].origin
+			if not point.is_finite(): continue
+			var d := point.distance_squared_to(eye)
+			if drivers.has(patch.fish_ids[i]): d *= 0.75
+			if d < distance:
+				distance = d
+				nearest = i
+	for i in patch.fish_ids.size():
+		var id := patch.fish_ids[i]
+		if i != nearest:
+			_drop_driver(id)
+			continue
+		var pose := patch.fish_poses[i]
+		if not ActiveMotion.wanted(session, pose.origin, drivers.get(id)):
+			_drop_driver(id)
+			continue
+		var beat := patch.beat + i * 1.7
+		if not individual_fish.has(id):
+			var fish := FishRig.new()
+			add_child(fish)
+			fish.global_transform = pose
+			var skeleton := fish.build_physical("local" if patch.mottled else "", patch.face_slots[i].x, beat, patch.dart)
+			individual_fish[id] = {"model":fish, "skeleton":skeleton}
+		var member: Dictionary = individual_fish[id]
+		member.model.visible = rendered
+		_restore_targets(id)
+		member.model.global_transform = pose
+		FishRig.pose_physical(member.skeleton, beat, patch.dart)
+		_drive(id, member.skeleton, true, true)
+		if drivers.has(id):
+			# Keep the authored school sample for the route and suppress only this member's draws.
+			_fish_pose(patch, i, Transform3D(Basis.from_scale(Vector3.ONE * 0.00001), patch.fishes))
+		else:
+			_drop_driver(id)
 
 func _update_heron(patch: Habitat, eyes: Array[Vector3], now: float) -> void:
 	var elapsed := now - patch.took_off
@@ -316,6 +432,10 @@ func _update_school(patch: Habitat, observer: Vector3, now: float, delta: float,
 	var center := Vector3.ZERO
 	var count := 0
 	for i in SCHOOL_SIZE:
+		var id: String = patch.fish_ids[i]
+		if combat.absent(id):
+			_hide_member(patch, i)
+			continue
 		var angle := patch.swim_angle + i * 0.29 + patch.dart * sin(now * 1.5) * 0.4
 		var radius := (1.35 + (i % 3) * 0.44) * (1.15 if patch.mottled else 0.73)
 		var point := patch.fishes + Vector3(sin(angle) * radius + away.x * patch.dart * 1.35, 0, cos(angle) * 0.85 - i * 0.17 + away.y * patch.dart)
@@ -325,11 +445,14 @@ func _update_school(patch: Habitat, observer: Vector3, now: float, delta: float,
 		if bed > point.y - 0.09:
 			point.z -= 2.3
 			if stream.ground_at(point) > point.y - 0.09:
-				_fish_pose(patch, i, Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * 0.001), point))
+				_hide_member(patch, i)
 				continue
 		var yaw := atan2(-cos(angle) * radius, sin(angle) * 0.85) + sin(now * 5.5 + i) * (0.08 + 0.18 * patch.dart)
 		var scale_factor := (0.78 + 0.08 * (i % 3)) * (1.20 if patch.mottled else 0.89)
-		_fish_pose(patch, i, Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3.ONE * scale_factor), point),patch.beat+i*1.7)
+		point = combat.rejoin(id, point, now)
+		var pose := Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3.ONE * scale_factor), point)
+		patch.fish_poses[i] = pose
+		_fish_pose(patch, i, pose, patch.beat+i*1.7)
 		center += point
 		count += 1
 		if not lead.is_finite():
@@ -356,6 +479,10 @@ func _fish_pose(patch: Habitat, index: int, pose: Transform3D, beat := 0.0) -> v
 	var skin:=Transform3D(Basis.from_scale(FISH_RADII),FISH_SKULL)
 	patch.natural_faces[slot.x].multimesh.set_instance_transform(slot.y,pose*skin)
 
+func _hide_member(patch: Habitat, index: int) -> void:
+	patch.fish_poses[index].origin = Vector3.INF
+	_fish_pose(patch, index, Transform3D(Basis.from_scale(Vector3.ONE * 0.00001), patch.fishes))
+
 func preview_model(parent: Node, id: String, morph: String, face:=0) -> Node3D:
 	if WastelandBenthicAnimal.NAMES.has(id):
 		var animal := WastelandBenthicAnimal.new()
@@ -380,6 +507,8 @@ func observation(eye: Vector3, forward: Vector3, max_distance: float = 25.0) -> 
 	for patch in habitats:
 		for species in ["heron", "lake_fish"]:
 			var is_heron: bool = species == "heron"
+			if is_heron and combat.absent(patch.heron_id):
+				continue
 			var point := patch.bird.global_position + Vector3.UP * (0.78 if patch.juvenile else 0.94) if is_heron else patch.fish_center
 			if not point.is_finite():
 				continue
@@ -398,7 +527,7 @@ func observation(eye: Vector3, forward: Vector3, max_distance: float = 25.0) -> 
 			var morph := "young" if is_heron and patch.juvenile else "local" if not is_heron and patch.mottled else ""
 			best = {"type": species, "name": label, "morph": morph, "point": point, "distance": distance}
 	for animal in bottom_life:
-		if not animal.active_pose:
+		if not animal.active_pose or combat.absent(animal.get_meta("lake_id")):
 			continue
 		var point := animal.global_position+Vector3.UP*0.1
 		var offset := point-eye

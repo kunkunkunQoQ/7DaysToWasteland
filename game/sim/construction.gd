@@ -346,6 +346,16 @@ func damage(cell: Vector3i, amount: float) -> void:
 		return
 	_refresh_surface(cell)
 
+func surface_material(cell: Vector3i) -> String:
+	var info: Dictionary = blocks.get(cell, {})
+	if info.is_empty(): return ""
+	match str(info.device):
+		"": return REPAIR[int(info.tier)].keys()[0]
+		"bench", "spikes": return "wood"
+		"campfire": return "stone"
+		"forge": return "brick"
+		_: return "metal"
+
 func _salvage(info: Dictionary) -> Dictionary:
 	var device: String = info.device
 	if device.is_empty():
@@ -879,9 +889,9 @@ func _trap(cell: Vector3i, info: Dictionary) -> void:
 			session.audio.play_at("boom", at)
 			session.hordes.add_noise(at, 50.0)
 			session.hordes.add_heat(at, 22.0)
-			for actor in session.hordes.alive:
-				if actor.global_position.distance_to(at) < 4.6:
-					actor.take_hit(95.0, at)
+			for actor: WastelandCreature in session.hordes.alive.duplicate():
+				if actor.physical_position().distance_to(at) < 4.6:
+					actor.take_hit(95.0, at, true)
 			destroy(cell)
 		"turret":
 			info.ammo = int(info.ammo) - 1
@@ -913,7 +923,7 @@ func _mount(cell: Vector3i) -> void:
 	if record.device != "":
 		visual.set_meta("active", active)
 	if record.device == "":
-		visual.material_override = _material(int(record.tier), crack_stage(record))
+		visual.material_override = _material(int(record.tier), crack_stage(record), hash(cell) & 7)
 	else:
 		visual.material_override = _device_material(crack_stage(record))
 	body.add_child(visual)
@@ -1012,13 +1022,13 @@ func _refresh_surface(cell: Vector3i) -> void:
 	if nodes.has(cell):
 		var visual: MeshInstance3D = nodes[cell].get_child(0)
 		var stage := crack_stage(info)
-		visual.material_override = _material(int(info.tier), stage) if info.device == "" else _device_material(stage)
+		visual.material_override = _material(int(info.tier), stage, hash(cell) & 7) if info.device == "" else _device_material(stage)
 
 func _device_material(stage: int) -> Material:
 	return WastelandLook.colored_material() if stage == 0 else _material(TONES.size(), stage)
 
-func _material(tier: int, cracks: int = 0) -> ShaderMaterial:
-	var key := tier * 3 + cracks
+func _material(tier: int, cracks: int = 0, wear: int = 0) -> ShaderMaterial:
+	var key := (tier * 3 + cracks) * 8 + wear
 	if not materials.has(key):
 		var mat := ShaderMaterial.new()
 		mat.shader = preload("res://shaders/construction_finish.gdshader")
@@ -1026,6 +1036,8 @@ func _material(tier: int, cracks: int = 0) -> ShaderMaterial:
 			mat.set_shader_parameter("tint", Color.html(TONES[tier]))
 		mat.set_shader_parameter("tier", tier)
 		mat.set_shader_parameter("cracks", cracks)
+		mat.set_shader_parameter("patina", preload("res://game/art/weather_noise.tres"))
+		mat.set_shader_parameter("wear_offset", Vector2(wear * 0.375, wear * 0.625))
 		materials[key] = mat
 	return materials[key]
 

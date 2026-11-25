@@ -5,6 +5,32 @@ extends RefCounted
 const BUNDLE_VOLUME:={"wood":0.075,"stone":0.21,"scrap":0.070,"cloth":0.034,"fiber":0.012,"wire":0.009,"parts":0.050,"brick":0.018}
 const MAX_UNITS:=6
 
+static func material_hand_damage(material: String) -> int:
+	match material:
+		"cloth", "fiber": return 0
+		"brick", "stone", "cobble", "concrete": return 3
+		"iron", "steel", "metal", "scrap", "wire", "parts": return 4
+		_: return 2
+
+static func hand_impact_damage(body: StaticBody3D, site: String) -> int:
+	var components: Dictionary = body.get_meta("salvage_components", {})
+	if not components.is_empty():
+		var volumes: Array[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
+		for material: String in components:
+			volumes[material_hand_damage(material)] += maxf(0.0, float(components[material]))
+		# Choose the main rigid material in a shared collider, such as a wooden frame with padding and screws.
+		var largest_volume := 0.0
+		var damage := 0
+		for grade in range(2, volumes.size()):
+			if volumes[grade] > largest_volume:
+				largest_volume = volumes[grade]
+				damage = grade
+		if largest_volume > 0.0 or volumes[0] > 0.0: return damage
+	var material := str(body.get_meta("salvage_material", ""))
+	if material.is_empty():
+		material = _material(site, str(body.get_meta("site_id", "")))
+	return material_hand_damage(material)
+
 static func origin(chunk:WastelandChunk,id:String)->Vector3:
 	for body:StaticBody3D in chunk.structures.get(id,[]):
 		if is_instance_valid(body) and not body.is_queued_for_deletion(): return body.global_position

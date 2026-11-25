@@ -313,7 +313,8 @@ func object_body(local: String, kind: String, pos: Vector3, size: Vector3, meta:
 	for key in meta:
 		body.set_meta(key, meta[key])
 	decoration_root.add_child(body)
-	WastelandLook.collider(body, size, Vector3.ZERO)
+	if not stream.is_preview:
+		WastelandLook.collider(body, size, Vector3.ZERO)
 	return body
 
 func _dress(rows: Array) -> void:
@@ -338,16 +339,18 @@ func _dress(rows: Array) -> void:
 		var basis := Basis(Vector3.UP, float(entry.angle)).scaled(Vector3.ONE * s)
 		var count: int = groups[group].transforms.size()
 		groups[group].transforms.append(Transform3D(basis, at))
+		if stream.is_preview:
+			continue
 		if id in TERRAIN.RESOURCES or entry.get("pickup",false):
 			var shape := _nature_shape(id) * s
 			var resource := object_body("nature/" + unique, "resource", at + Vector3.UP * shape.y * 0.5, shape,
 				{"resource": id, "index": unique, "group": group, "instance": count})
-			if id in ["oak","pine"] and not stream.is_preview:
+			if id in ["oak","pine"]:
 				resource.set_meta("tree_model", model)
 				resource.set_meta("tree_variant", variant)
 				resource.set_meta("tree_pose", Transform3D(basis, at))
 				standing_trees[unique] = resource
-		elif not stream.is_preview:
+		else:
 			index_nature(unique, id, group, count, Transform3D(basis,at), _nature_mesh(model,variant,true))
 	if terrain_accessory_shader == null:
 		terrain_accessory_shader = ShaderMaterial.new()

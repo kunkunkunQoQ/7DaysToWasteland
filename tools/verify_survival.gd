@@ -186,7 +186,7 @@ func _species_and_morphs() -> void:
 	var hp := hare.hp
 	wolf.brain._pursue(hare)
 	_check(hare.hp < hp and not session.progress.records.has("kill_hare"), "pursuit affects prey without crediting the player")
-	if hare.active:
+	if hare.hp > 0.0:
 		director.defeated(hare)
 	else:
 		director._spawn("hare", arena, false, {"morph":"young"})

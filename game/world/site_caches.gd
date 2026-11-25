@@ -3,8 +3,11 @@ extends RefCounted
 const Chest:=preload("res://game/art/supply_chest.gd")
 const Containers:=preload("res://game/world/regional_caches.gd")
 const LOCAL_FORMS:={"lodge":"forest","cabin":"forest","fuel":"ash","hospital":"ridge","police":"ridge","tower":"ridge","bunker":"ridge","granary":"forest","garage":"ash","post":"town"}
+# These slots in the original seeded floor plan could replace the extra deep
+# chest. Retain the placement roll so old nest/deep keys still reach their stock.
+const DEEP_LAYOUT_SLOTS := {"bunker":[1,2], "garage":[0], "post":[2]}
 
-static func populate(chunk:WastelandChunk,center:Vector3,definition:Dictionary)->void:
+static func populate(chunk:WastelandChunk,center:Vector3,definition:Dictionary,stock:Array)->void:
 	var gen:WastelandTerrainGen=chunk.stream.generator
 	var rng:=RandomNumberGenerator.new()
 	rng.seed=gen.seed_at(chunk.cell,0x3109)^chunk.site.hash()
@@ -47,28 +50,38 @@ static func populate(chunk:WastelandChunk,center:Vector3,definition:Dictionary)-
 					at.z=center.z-chunk.ruin.end*half*0.16
 				approach=at+facing*1.36
 			anchors.append({"at":at,"approach":approach,"yaw":atan2(facing.x,facing.z)+rng.randf_range(-0.10,0.10),"story":story})
-	var stock:Array=definition.loots
 	if stock.is_empty(): return
 	var count:=mini(anchors.size(),rng.randi_range(maxi(1,stock.size()-2),stock.size()+1))
 	var biome:=Chest.kind_at(gen,chunk.position+center)
+	var deep_table: String = definition.get("deep_loot","")
+	var guarded_slots: Array = DEEP_LAYOUT_SLOTS.get(chunk.site,[])
 	var deep_stock := false
+	var remaining := []
 	for index in count:
 		var candidate:Dictionary=anchors.pop_at(rng.randi_range(0,anchors.size()-1))
 		var profile:String=biome if rng.randf()<0.58 else LOCAL_FORMS[chunk.site]
 		var size:Vector3=Chest.DIMENSIONS[profile]
-		var table:String=stock[rng.randi_range(0,stock.size()-1)]
-		if index==0 and trade_ruin: table=stock[0]
-		var meta:={"quest":false,"cache_floor":candidate.story,"cache_approach":candidate.approach+chunk.position,"cache_biome":biome}
+		var roll := rng.randi_range(0,stock.size()-1)
+		var layout_slot := 0 if index==0 and trade_ruin else roll
+		var interior: bool = candidate.story>0 or candidate.at.z<center.z-half*0.55
+		var guarded := interior and layout_slot in guarded_slots
+		if remaining.is_empty(): remaining = stock.duplicate()
+		var table: String = stock[0] if index==0 else stock[roll]
+		if index>0 and guarded and not deep_stock and deep_table in remaining:
+			table = deep_table
+		elif table not in remaining:
+			table = remaining[roll % remaining.size()]
+		while table in remaining: remaining.erase(table)
+		var meta:={"quest":false,"building_cache":true,"cache_floor":candidate.story,"cache_approach":candidate.approach+chunk.position,"cache_biome":biome}
 		var body:=Containers.spawn(chunk,"container/"+str(index),table,candidate.at+Vector3.UP*(0.12+size.y*0.5),meta,profile)
 		body.rotation.y=candidate.yaw
-		if table in ["medical","weapons","safe","garage_spares"] and (candidate.story>0 or candidate.at.z<center.z-half*0.55): deep_stock=true
-	if not deep_stock and chunk.site not in ["lodge","tower","police","hospital"]:
+		if guarded: deep_stock=true
+	if not deep_stock and not deep_table.is_empty():
 		anchors.sort_custom(func(a: Dictionary,b: Dictionary): return a.story>b.story if a.story!=b.story else a.at.z<b.at.z)
 		for slot in anchors:
 			if slot.story == 0 and slot.at.z > center.z-half*0.55: continue
-			var cache_type: String = {"bunker":"weapons","post":"medical","cabin":"medical"}.get(chunk.site,"garage_spares")
 			var size: Vector3 = Chest.DIMENSIONS[biome]
-			var meta := {"cache_floor":slot.story,"cache_approach":slot.approach+chunk.position,"cache_biome":biome}
-			var chest := Containers.spawn(chunk,"nest/deep",cache_type,slot.at+Vector3.UP*(0.12+size.y*0.5),meta,biome)
+			var meta := {"building_cache":true,"cache_floor":slot.story,"cache_approach":slot.approach+chunk.position,"cache_biome":biome}
+			var chest := Containers.spawn(chunk,"nest/deep",deep_table,slot.at+Vector3.UP*(0.12+size.y*0.5),meta,biome)
 			chest.rotation.y=slot.yaw
 			break

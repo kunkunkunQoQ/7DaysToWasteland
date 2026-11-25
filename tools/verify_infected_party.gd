@@ -34,7 +34,7 @@ func _host() -> void:
 	session.hordes._spawn("bloater",at+Vector3.RIGHT*0.7,false)
 	var corpse: WastelandCreature = session.hordes.alive.back()
 	corpse.take_hit(999,at)
-	_check(await _until(func(): return not corpse.active and guest.health < before-12,5),"host resolves delayed blast against remote survivor")
+	_check(await _until(func(): return session.hordes.corpses.has(corpse) and guest.health < before-12,5),"host resolves delayed blast against remote survivor and keeps its physical remains")
 	_check(await _until(func(): return session.marker_records.any(func(row): return row.name=="rupture visible"),15),"guest is ready to observe a new projectile")
 	at = guest.global_position
 	var launch := Vector3(2,3,-3)

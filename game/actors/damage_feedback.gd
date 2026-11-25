@@ -7,6 +7,7 @@ const COLORS := {
 }
 const LABELS := {
 	"claw": "撕咬", "heavy": "重击", "acid": "酸液", "radiation": "辐蚀", "boar": "野猪冲撞", "shield":"盾牌格挡","bark":"树皮擦伤",
+	"hard_impact": "拳头挫伤",
 	"rupture": "胀囊爆裂", "residue": "腐液灼伤", "fall": "坠落", "bleed": "失血", "infection": "感染", "cold": "失温", "drown": "溺水",
 	"hunger": "饥饿", "thirst": "缺水", "debris": "坠物砸伤", "timber":"倒树砸伤", "spikes": "踩中木刺",
 }

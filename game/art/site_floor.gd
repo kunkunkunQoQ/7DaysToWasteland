@@ -36,6 +36,7 @@ static func apply(body: StaticBody3D, site: String, size: Vector3, center: Vecto
 		mat.set_shader_parameter("tone",Color(style[1]))
 		mat.set_shader_parameter("accent",Color(style[2]))
 		mat.set_shader_parameter("weathering",float(variation))
+		mat.set_shader_parameter("patina",preload("res://game/art/weather_noise.tres"))
 		finishes[finish_key]=mat
 	visual.mesh=meshes[key]
 	visual.material_override=finishes[finish_key]

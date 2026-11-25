@@ -4,6 +4,9 @@ extends Node3D
 const SIZE := WastelandTerrainGen.SIZE
 const CONCURRENT := 3
 const GUEST_RADIUS := 2
+const PREVIEW_RADIUS := 3
+# Include overhanging scenery and the small camera motion between visibility updates.
+const PREVIEW_MARGIN := 9.0
 
 class BuildJob:
 	extends RefCounted
@@ -43,6 +46,10 @@ var center := Vector2i(-99999, -99999)
 var guest_centers: Array[Vector2i]=[]
 var ready_for_streaming := false
 var is_preview := false
+var preview_camera: Camera3D
+var preview_cells: Dictionary = {}
+var preview_transform := Transform3D.IDENTITY
+var preview_projection := Projection.IDENTITY
 var loot_day := 1
 var refill_days := 0
 var lake_wildlife: WastelandLakeWildlife
@@ -68,6 +75,47 @@ func prime(p: Vector3) -> void:
 		lake_wildlife.configure(self)
 	ready_for_streaming = true
 	_queue_neighborhood()
+
+func frame_preview(camera: Camera3D, focus: Vector3) -> void:
+	preview_camera = camera
+	center = WastelandTerrainGen.chunk_at(Vector2(focus.x, focus.z))
+	radius = PREVIEW_RADIUS
+	_refresh_preview_cells(true)
+	# Show the subject on the first frame while workers build the surrounding view.
+	if preview_cells.has(center):
+		ensure_landing(focus)
+	ready_for_streaming = true
+
+func _refresh_preview_cells(force := false) -> void:
+	var pose := preview_camera.global_transform
+	var projection := preview_camera.get_camera_projection()
+	if not force and projection == preview_projection and pose.origin.distance_squared_to(preview_transform.origin) < 1.0:
+		var angle_limit := cos(deg_to_rad(1.0))
+		if pose.basis.z.dot(preview_transform.basis.z) > angle_limit and pose.basis.x.dot(preview_transform.basis.x) > angle_limit:
+			return
+	preview_transform = pose
+	preview_projection = projection
+
+	# Project the full camera frustum onto XZ, so tall trees and slopes can enter the view at any elevation.
+	var eye := Vector2(pose.origin.x, pose.origin.z)
+	var points := PackedVector2Array([eye])
+	var viewport_size := preview_camera.get_viewport().get_visible_rect().size
+	for y: float in [0.0, viewport_size.y]:
+		for x: float in [0.0, viewport_size.x]:
+			var corner := preview_camera.project_position(Vector2(x, y), preview_camera.far)
+			points.append(Vector2(corner.x, corner.z))
+	var footprint := Geometry2D.convex_hull(points)
+	var wanted: Dictionary = {}
+	_queue_around(wanted, center, radius)
+	for cell: Vector2i in wanted.keys():
+		var bounds := Rect2(Vector2(cell * SIZE), Vector2.ONE * SIZE).grow(PREVIEW_MARGIN)
+		var corners := PackedVector2Array([bounds.position, Vector2(bounds.end.x, bounds.position.y),
+			bounds.end, Vector2(bounds.position.x, bounds.end.y)])
+		if Geometry2D.intersect_polygons(footprint, corners).is_empty():
+			wanted.erase(cell)
+	if wanted != preview_cells:
+		preview_cells = wanted
+		_queue_neighborhood()
 
 func refresh(at: Vector3, next_radius: int, guests:Array[Vector3]=[]) -> void:
 	var new_cell := WastelandTerrainGen.chunk_at(Vector2(at.x, at.z))
@@ -107,9 +155,11 @@ func ensure_landing(at: Vector3) -> void:
 
 func _queue_neighborhood() -> void:
 	queued.clear()
-	var wanted: Dictionary={}
-	_queue_around(wanted,center,radius)
-	for loc:Vector2i in guest_centers: _queue_around(wanted,loc,GUEST_RADIUS)
+	var wanted := preview_cells
+	if preview_camera == null:
+		wanted = {}
+		_queue_around(wanted,center,radius)
+		for loc:Vector2i in guest_centers: _queue_around(wanted,loc,GUEST_RADIUS)
 	for cell:Vector2i in wanted:
 		if not active.has(cell) and not jobs.has(cell): queued.append(cell)
 	queued.sort_custom(func(a:Vector2i,b:Vector2i):return wanted[a]<wanted[b])
@@ -129,6 +179,7 @@ func _queue_around(wanted:Dictionary,loc:Vector2i,extent:int)->void:
 			wanted[cell]=mini(int(wanted.get(cell,distance)),distance)
 
 func _inside(cell: Vector2i, extent: int) -> bool:
+	if preview_camera != null: return preview_cells.has(cell)
 	var offset := (cell - center).abs()
 	if maxi(offset.x,offset.y)<=extent: return true
 	for loc:Vector2i in guest_centers:
@@ -139,6 +190,8 @@ func _inside(cell: Vector2i, extent: int) -> bool:
 func _process(_delta: float) -> void:
 	if not ready_for_streaming:
 		return
+	if preview_camera != null:
+		_refresh_preview_cells()
 	if not nav_inflight.is_empty():
 		nav_inflight = nav_inflight.filter(NavigationServer3D.is_baking_navigation_mesh)
 	var applied := 0

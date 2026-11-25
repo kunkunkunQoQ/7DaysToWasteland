@@ -51,9 +51,8 @@ func run() -> void:
 			var after:=director.trophy_rng.state
 			director.defeated(actor)
 			check(director.trophy_rng.state==after and int(world.progress.records.get("rare_drop",0))==awards,"duplicate defeat consumes no roll or award")
-			if not actor.spec.get("animal",false):
-				check(actor.active and actor.brain.state==WastelandCreatureBrain.State.DEAD,"infected corpse remains after granting its drop")
-				actor.think(3.1,world.player)
+			check(actor.active and actor.brain.state==WastelandCreatureBrain.State.DEAD,"creature corpse remains after granting its drop")
+			actor.think(WastelandCreature.CORPSE_SECONDS+0.1,world.player)
 			check(not actor.active,"defeated creature returns to the pool")
 			seen[id]=true
 	director._spawn("fox",at,false)

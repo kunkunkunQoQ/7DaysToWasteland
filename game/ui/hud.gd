@@ -357,6 +357,7 @@ func _hotbar(foot: Vector2) -> void:
 
 
 func _center(point: Vector2) -> void:
+	if session.player.is_knocked_down(): return
 	var gap := 5.0 + session.player.shot_spread()*360.0 + session.player.hand.charge * 4.0
 	draw_rect(Rect2(point-Vector2(1,1),Vector2(2,2)),CREAM)
 	for dir in [Vector2.LEFT,Vector2.RIGHT,Vector2.UP,Vector2.DOWN]:

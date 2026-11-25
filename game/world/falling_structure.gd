@@ -16,10 +16,17 @@ class FallingPiece extends RigidBody3D:
 		if victim is WastelandSurvivor or victim is WastelandCreature:
 			struck[victim] = true
 			var damage := clampf(impact_speed * sqrt(mass) * 0.85, 3.0, 85.0)
+			var at := Vector3.INF
+			var state := PhysicsServer3D.body_get_direct_state(get_rid())
+			if state:
+				for i in state.get_contact_count():
+					if state.get_contact_collider_object(i) == victim:
+						at = state.get_contact_collider_position(i)
+						break
 			if victim is WastelandSurvivor:
-				victim.damage(damage, "debris", global_position)
+				victim.damage(damage, "debris", global_position, at)
 			elif victim.active and victim.hp > 0.0:
-				victim.take_hit(damage, global_position, damage >= 22.0)
+				victim.take_hit(damage, global_position, damage >= 22.0, false, at)
 
 # Several adjacent blocks can break off as one rigid piece; each has its own collider.
 static func release(chunk: Node3D, source: StaticBody3D, key: String, weight := 0.0, join: FallingPiece = null) -> FallingPiece:
@@ -60,5 +67,7 @@ static func release(chunk: Node3D, source: StaticBody3D, key: String, weight := 
 	piece.add_child(collision)
 	collision.global_transform = source.global_transform * Transform3D(Basis.IDENTITY, bounds.get_center())
 	for part in visible_parts:
+		if part is MeshInstance3D:
+			preload("res://game/art/site_weathering.gd").detach(part)
 		part.reparent(piece, true)
 	return piece

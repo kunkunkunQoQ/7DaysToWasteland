@@ -1,7 +1,13 @@
 extends RefCounted
 
 const LAND := {"alpine":["shelter","weather"],"desert":["canal","well"]}
+const Signs := preload("res://game/world/painted_sign.gd")
 const LABELS := {"shelter":"雪线避风棚","weather":"山口测候站","canal":"干渠进水闸","well":"驼站提水泵","ferry":"渡船航运铭牌","pump":"泵站水尺","bridge":"断桥界碑"}
+const INSCRIPTIONS := {
+	"shelter":"SNOWLINE SHELTER\nOrange ring: sheltered slope\nBlue pair: windy shortcut",
+	"weather":"PASS WEATHER STATION", "canal":"CANAL INTAKE", "well":"CARAVAN WELL",
+	"ferry":"GRAY BAY FERRY", "pump":"INTAKE WATER GAUGE", "bridge":"BRIDGE SURVEY MARK"
+}
 const WOOD := Color("#866046")
 const STEEL := Color("#56716c")
 const AMBER := Color("#d69152")
@@ -150,31 +156,31 @@ static func populate(c:WastelandChunk)->void:
 	for id:String in plan.points:
 		var at:Vector3=plan.points[id]
 		if WastelandTerrainGen.chunk_at(Vector2(at.x,at.z))!=c.cell: continue
+		var yaw := 0.0
+		if id=="shelter":
+			var forward:Vector3=plan.points.weather-at
+			yaw=atan2(forward.x,forward.z)
 		# Keep a reading position clear at the plaque, including thick kelp bounds.
-		var clearing:=AABB(at-c.position-Vector3(1.7,0.3,1.0),Vector3(3.4,3.8,4.0))
+		var facing:=Transform3D(Basis(Vector3.UP,yaw),at-c.position)
+		var clearing:=facing*AABB(Vector3(-1.7,-0.3,-1.0),Vector3(3.4,3.8,4.0))
 		for key:String in c.small_nature.keys():
 			if clearing.intersects(c.small_nature[key].bounds):
 				c.erase_small_nature(key)
 		var base_key:="expedition/"+id+"/"
 		_joint(c,base_key+"plate",[base_key+"post"])
-		var title:=_member(c,id,"plate",at+Vector3(0,0.83,0),Vector3(1.05,0.67,0.17),STEEL)
-		_grounded(c,id,"post",at+Vector3(0,0.32,0),Vector3(0.18,0.70,0.16),WOOD)
-		var message: String = LABELS[id]
-		if id=="shelter": message+="\n橙环 · 避风缓坡\n蓝双环 · 迎风近道"
-		preload("res://game/world/painted_sign.gd").letter(title,message,Vector3(0,0.02,0.105),Vector2(0.93,0.49))
+		var title:=_member(c,id,"plate",at+Vector3(0,0.83,0),Vector3(1.05,0.67,0.17),STEEL,Vector3(0,yaw,0))
+		_grounded(c,id,"post",at+Vector3(0,0.32,0),Vector3(0.18,0.70,0.16),WOOD,Vector3(0,yaw,0))
+		Signs.enamel(title.get_child(0),STEEL,1+posmod(c.stream.generator.seed_at(c.cell,383),3),id.hash())
+		Signs.letter(title,INSCRIPTIONS[id],Vector3(0,0.02,0.105),Vector2(0.93,0.49))
 		if id in ["shelter","weather","canal","well"]:
 			var repaired:=_repair_detail(c,id,title)
 			WastelandLook.box(repaired,Vector3(0.86,0.08,0.06),Vector3(0,-0.23,0.09),Color("#85d19e"),0.4)
 			if c.stream.generator.site_revision==0 and id=="shelter":
-				var towards:Vector3=plan.points.weather-at
-				repaired.rotation.y=atan2(towards.x,towards.z)
 				WastelandLook.box(repaired,Vector3(1.21,0.18,0.66),Vector3(0,-0.49,-1.95),Color("#d4ab73"))
 			elif c.stream.generator.site_revision==0 and id in ["canal","well"]:
 				WastelandLook.box(repaired,Vector3(1.36,0.06,2.6 if id=="canal" else 1.25),Vector3(0,-0.46,-1.72),Color("#578e91"))
 		match id:
 			"shelter":
-				var forward:Vector3=plan.points.weather-at
-				var yaw:=atan2(forward.x,forward.z)
 				var weathered:bool=c.stream.generator.site_revision>0
 				var torn_side:=1 if posmod(c.stream.generator.seed_at(c.cell,349),2)==0 else -1
 				for side:int in [-1,1]:

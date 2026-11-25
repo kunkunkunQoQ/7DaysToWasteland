@@ -4,7 +4,7 @@ extends Node
 const DEFAULT_PORT := 7357
 const DISCOVERY := preload("res://game/net/lan_discovery.gd")
 const MAX_PLAYERS := DISCOVERY.MAX_PLAYERS
-const PROTOCOL_VERSION := 3
+const PROTOCOL_VERSION := 4
 const HOST_ID := 1
 const JOIN_TIMEOUT_MS := 20000
 var discovery := DISCOVERY.new()
@@ -57,6 +57,7 @@ class MemberState:
 	var manifest_hash: Variant
 	var actor_frame := 0
 	var last_chest_state := -1
+	var settled_sent := {}
 	func _init(id: int) -> void:
 		peer_id=id
 
@@ -80,6 +81,8 @@ var next_name_send := 0
 var local_token := ""
 var smooth_actors: Dictionary = {}
 var actors_now: Dictionary = {}
+var party_falls := preload("res://game/net/party_falls.gd").new()
+var resting_creatures := {}
 const ACTORS_PER_PAGE := 5
 const FRAME_FIELDS := ["time","elapsed","active","hint","loot","target_hp","shape","turn","wave","ride","charge","reload","confirm","noise"]
 const PLAYER_FIELDS := ["point","health","profile","limits","crouch","body_height","eye_height","stamina","hunger","hydration","temp","bleed","infection","fracture","lamp","breath","provisions","sprain","wet"]
@@ -172,6 +175,8 @@ func stop() -> void:
 	replica_actors.clear()
 	smooth_actors.clear()
 	actors_now.clear()
+	resting_creatures.clear()
+	party_falls = preload("res://game/net/party_falls.gd").new()
 
 func player_count() -> int:
 	return 1+members.size()
@@ -305,6 +310,8 @@ func _identify(protocol:int, token: String, outfit: String, nickname: String) ->
 	session.add_child(member)
 	var at:=_spawn_near_owner(session,state)
 	member.configure(session,previous,at,false,outfit,state.bag)
+	member.ragdoll_changed.connect(session._player_fell.bind(member))
+	member.ragdoll_struck.connect(session._player_part_hit.bind(member))
 	if member.global_position.distance_squared_to(at) > 80.0 * 80.0:
 		member.global_position = at
 	session.stream.ensure_landing(member.global_position)
@@ -317,6 +324,7 @@ func _identify(protocol:int, token: String, outfit: String, nickname: String) ->
 	state.avatar.apply_outfit(outfit)
 	state.avatar.set_player_name(state.nickname)
 	state.avatar.visible=not state.downed
+	member.set_live_avatar(state.avatar)
 	for key in CONTEXT:
 		state.context[key]=session.get(key)
 	state.context.interaction={}
@@ -341,7 +349,8 @@ func _identify(protocol:int, token: String, outfit: String, nickname: String) ->
 	var payload: Dictionary={"settings":session.world_settings,"time":session.clock.hours,"elapsed":session.clock.elapsed,
 		"player":member.snapshot(),"bag":state.bag.snapshot(),"hand_queue":state.hand_queue,"progress":session.progress.snapshot(),"acid_pools":session.fx.acid_snapshot(),
 		"acid_shots":session.fx.acid_flights(member.global_position),"acid_serial":session.fx.acid_serial,
-		"roster":_roster_rows(state.peer_id),"downed":state.downed}
+		"roster":_roster_rows(state.peer_id),"downed":state.downed,"falls":party_falls.snapshot(session,self),
+		"lake_combat":session.stream.lake_wildlife.combat_snapshot()}
 	_bootstrap.rpc_id(state.peer_id,payload)
 	_broadcast_roster()
 	invalidate_world()
@@ -429,6 +438,7 @@ func _bootstrap(start: Dictionary) -> void:
 	actor_pages.clear()
 	replica_actors.clear()
 	_apply_roster(start.get("roster",[]))
+	for fall in start.get("falls",[]): party_falls.apply(session,multiplayer.get_unique_id(),fall)
 	client_timer=0.0
 	local_pressed=0
 	appearance_changed(game.options.appearance)
@@ -493,6 +503,7 @@ func _apply_roster(rows:Array)->void:
 			view=ReplicaMember.new()
 			view.avatar=WastelandPartyAvatar.new()
 			game.session.add_child(view.avatar)
+			view.avatar.configure_live_motion(game.session)
 			view.lamp=game.session.player.headlamp.duplicate() as SpotLight3D
 			view.avatar.add_child(view.lamp)
 			view.lamp.hide()
@@ -504,6 +515,7 @@ func _apply_roster(rows:Array)->void:
 		if not present.has(peer): _remove_replica(peer)
 
 func _remove_replica(peer:int)->void:
+	party_falls.detach(peer)
 	var view:ReplicaMember=replicas.get(peer)
 	if view!=null and is_instance_valid(view.avatar):
 		view.avatar.hide()
@@ -624,10 +636,11 @@ func _tick_member(session:WastelandSession,state:MemberState,delta:float)->void:
 			state.input.held=0
 			state.input.drive=Vector2.ZERO
 		var enabled:=bool(state.input.enabled) and not state.downed and fresh
-		member.rotation.y=float(state.input.yaw)
-		member.pitch=float(state.input.pitch)
-		member.eyes.rotation.x=member.pitch
-		if not nearby:
+		if not state.downed and not member.is_knocked_down():
+			member.rotation.y=float(state.input.yaw)
+			member.pitch=float(state.input.pitch)
+			member.eyes.rotation.x=member.pitch
+		if not nearby and not state.downed and not member.is_knocked_down():
 			var anchor:=_spawn_near_owner(session,state)
 			member.dismount(true)
 			member.global_position=anchor
@@ -638,7 +651,7 @@ func _tick_member(session:WastelandSession,state:MemberState,delta:float)->void:
 				member.simulate(delta,enabled)
 				session.action_lock=maxf(0.0,session.action_lock-delta)
 				session._tick_reload(delta)
-				if enabled and not state.downed:
+				if enabled and not state.downed and not member.is_knocked_down():
 					session._process_controls(delta))
 		state.pressed=0
 	var actions:=state.commands.duplicate()
@@ -652,11 +665,13 @@ func _tick_member(session:WastelandSession,state:MemberState,delta:float)->void:
 	if is_instance_valid(avatar):
 		avatar.wear_loadout(state.bag.gear)
 		avatar.set_offhand(state.bag.offhand,member.guarding,member.flashlight and not member.submerged)
-		avatar.visible=not state.appearance.is_empty() and not state.downed and not is_instance_valid(member.mount_vehicle)
+		avatar.visible=not state.appearance.is_empty() and not state.downed and not member.is_knocked_down() and not is_instance_valid(member.mount_vehicle)
+		if not avatar.visible: return
 		_avatar_motion(avatar,session.catalog,member.hand.model_id,member.hand.swing_serial,member.hand.shot_serial,int(state.bag.magazine.get(member.hand.model_id,0))>0)
 		avatar.pose(delta,Vector2(member.velocity.x,member.velocity.z).length(),member.crouch,member.swimming)
 
 func _send_slow_details(session:WastelandSession,state:MemberState)->void:
+	_send_settled_poses(session,state)
 	var trails:=session.hordes.trail_snapshot(state.survivor.global_position)
 	var raw:=var_to_bytes(trails)
 	var packed:=raw.compress(FileAccess.COMPRESSION_ZSTD)
@@ -731,11 +746,112 @@ func as_survivor(session:WastelandSession,victim:WastelandSurvivor,callback:Call
 	_as_member(session,state,callback)
 	return true
 
+func survivor_fell(session: WastelandSession, person: WastelandSurvivor, mode: int, impact: Vector3) -> void:
+	var member := member_for(person)
+	var row := session.PartyFalls.capture(person,member.peer_id if member else HOST_ID,mode,impact)
+	if not row.is_empty() and server():
+		for guest in joined_members(): _survivor_fall.rpc_id(guest.peer_id,row)
+
+@rpc("authority","call_remote","reliable",0)
+func _survivor_fall(row: Dictionary) -> void:
+	if not host and is_instance_valid(game.session) and game.session.replica:
+		party_falls.apply(game.session,multiplayer.get_unique_id(),row)
+
+func mirror_lake_combat(lake: WastelandLakeWildlife) -> void:
+	var joined := joined_members()
+	if joined.is_empty(): return
+	var rows := lake.combat_snapshot()
+	for member in joined:
+		_lake_combat.rpc_id(member.peer_id,rows)
+
+@rpc("authority","call_remote","reliable",0)
+func _lake_combat(rows: Dictionary) -> void:
+	if not host and is_instance_valid(game.session) and game.session.replica:
+		game.session.stream.lake_wildlife.restore_combat(rows)
+
+func mirror_player_hit(person: WastelandSurvivor, impact: Vector3, at: Vector3, bone: StringName) -> void:
+	var owner := member_for(person)
+	var peer := owner.peer_id if owner else HOST_ID
+	for guest in joined_members(): _part_hit.rpc_id(guest.peer_id,peer,impact,at,bone)
+
+@rpc("authority","call_remote","reliable",0)
+func _part_hit(peer: int, impact: Vector3, at: Vector3, bone: StringName) -> void:
+	if host or not is_instance_valid(game.session) or not game.session.replica: return
+	if peer == multiplayer.get_unique_id():
+		game.session.player.sync_part_hit(impact,at,bone)
+	elif party_falls.current.has(peer):
+		var body = party_falls.bodies.get(party_falls.current[peer])
+		if is_instance_valid(body): body.push(impact,at,bone)
+	else:
+		var avatar := replica_avatar(peer)
+		if is_instance_valid(avatar): avatar.push_part(impact,at,bone)
+
+func mirror_corpse_hit(hit: Dictionary) -> void:
+	for member in joined_members():
+		# A body can come to rest again between slow frames.
+		if hit.kind == "creature": member.settled_sent.erase(hit.id)
+		elif hit.kind == "survivor": member.settled_sent.erase(-int(hit.id))
+		_corpse_hit.rpc_id(member.peer_id,hit)
+
+@rpc("authority","call_remote","reliable",0)
+func _corpse_hit(hit: Dictionary) -> void:
+	if host or not is_instance_valid(game.session) or not game.session.replica: return
+	var rig: Node3D
+	match hit.kind:
+		"survivor":
+			var body = party_falls.bodies.get(hit.id)
+			if is_instance_valid(body): rig = body.physics
+		"creature":
+			var actor: WastelandCreature = smooth_actors.get(hit.id)
+			if is_instance_valid(actor): rig = actor.ragdoll
+		"lake":
+			var body: Dictionary = game.session.stream.lake_wildlife.combat.bodies.get(hit.id,{})
+			rig = body.get("rig")
+	if is_instance_valid(rig): rig.kick_at(hit.impulse,hit.at,hit.bone)
+
+# The initial impact runs immediately on each machine. Only the final resting
+# pose needs a joint snapshot, including for peers who approach a corpse later.
+func _send_settled_poses(session: WastelandSession, state: MemberState) -> void:
+	var nearby := {}
+	for actor: WastelandCreature in session.hordes.corpses:
+		if actor.physical_position().distance_squared_to(state.survivor.global_position) > 105.0*105.0:
+			continue
+		var id := actor.spawn_serial
+		if actor.ragdoll_settled():
+			nearby[id] = true
+			if not state.settled_sent.has(id):
+				_resting_pose.rpc_id(state.peer_id,id,actor.ragdoll_pose(),_creature_frame(actor))
+	for body in session.get_tree().get_nodes_in_group(party_falls.GROUP):
+		if not session.is_ancestor_of(body) or body.is_queued_for_deletion() or body.remaining <= 0.0 or not body.physics.is_settled():
+			continue
+		var id := -body.get_instance_id()
+		nearby[id] = true
+		if not state.settled_sent.has(id):
+			_resting_pose.rpc_id(state.peer_id,id,body.physics.pose_snapshot())
+	state.settled_sent = nearby
+
+@rpc("authority","call_remote","reliable",0)
+func _resting_pose(id: int, pose: PackedFloat32Array, creature_frame: Array = []) -> void:
+	if host or not is_instance_valid(game.session) or not game.session.replica or pose.is_empty():
+		return
+	if id < 0:
+		var body = party_falls.bodies.get(-id)
+		if is_instance_valid(body): body.physics.apply_pose(pose)
+	else:
+		# Actor pages travel on an independent channel and may arrive after this RPC.
+		var now := Time.get_ticks_msec()
+		for serial in resting_creatures.keys():
+			if resting_creatures[serial].expires < now: resting_creatures.erase(serial)
+		if creature_frame.size() > 24:
+			resting_creatures[id] = {"pose":pose, "frame":creature_frame,
+				"expires":now + int(WastelandCreature.CORPSE_SECONDS * 1000) + 2000}
+
 func member_failed(state:MemberState) -> void:
 	if not server() or state.downed:
 		return
 	state.downed=true
 	var member:=state.survivor
+	member.begin_death_ragdoll()
 	member.session.chest_leave(state.peer_id)
 	member.session.construction.tool_jobs.erase(member.get_instance_id())
 	state.pressed=0
@@ -751,6 +867,7 @@ func member_failed(state:MemberState) -> void:
 func _reset_member(session:WastelandSession,state:MemberState) -> void:
 	state.downed=false
 	var member:=state.survivor
+	member.reset_ragdoll()
 	member.health=member.max_health()
 	member.reset_water_state()
 	member.clear_damage_feedback()
@@ -782,6 +899,7 @@ func _member_down() -> void:
 func _revived() -> void:
 	if not host and is_instance_valid(game.session) and game.session.replica:
 		game.session.death_screen=false
+		game.session.player.reset_ragdoll()
 		game.session.player.clear_damage_feedback()
 		game.session.player.reset_water_state()
 		game.close_overlay()
@@ -896,18 +1014,19 @@ func _party_motion(session:WastelandSession,joined:Array[MemberState])->Array:
 
 func _motion_row(peer:int,person:WastelandSurvivor,bag:WastelandBag,downed:bool)->Array:
 	return [peer,person.global_position,person.rotation.y,Vector2(person.velocity.x,person.velocity.z).length(),person.crouch,person.swimming,
-		downed or is_instance_valid(person.mount_vehicle),person.hand.model_id,person.hand.swing_serial,person.hand.shot_serial,bag.offhand,person.guarding,
+		downed or person.is_knocked_down() or is_instance_valid(person.mount_vehicle),person.hand.model_id,person.hand.swing_serial,person.hand.shot_serial,bag.offhand,person.guarding,
 		person.flashlight and not person.submerged,person.headlamp.visible,person.eyes.position.y,person.pitch,int(bag.magazine.get(person.hand.model_id,0))>0]
 
 func _send_fast(session: WastelandSession,state:MemberState,party:Array) -> void:
 	var member:=state.survivor
 	var actors: Array=[]
-	for actor in session.hordes.alive:
-		if not actor.active or actor.global_position.distance_squared_to(member.global_position)>105.0*105.0:
+	for actor: WastelandCreature in session.hordes.alive + session.hordes.corpses:
+		if not actor.active or actor.physical_position().distance_squared_to(member.global_position)>105.0*105.0:
 			continue
-		actors.append([actor.spawn_serial, actor.type, actor.global_position, actor.rotation.y, actor.hp, actor.velocity,
-			actor.attack, actor.hurt, actor.windup, int(actor.attack_kind), actor.alerted, actor.morph, actor.look_index, actor.wardrobe_index, actor.limb_index, actor.face_variant,
-			int(actor.brain.state), actor.brain.state_left, actor.brain.wake_span, actor.brain.rage_left, actor.stage_health, actor.screamed, actor.limp_left,_actor_motion(actor)])
+		if state.settled_sent.has(actor.spawn_serial) and actor.ragdoll_settled():
+			actors.append([actor.spawn_serial])
+		else:
+			actors.append(_creature_frame(actor))
 	var row := {"time":session.clock.hours,"elapsed":session.clock.elapsed,
 		"member_guard":member.guarding,
 		"member_swings":member.hand.swing_serial,"member_shots":member.hand.shot_serial,"swing_power":member.hand.swing_force,
@@ -966,7 +1085,7 @@ func _party_frame(rows:Array)->void:
 func _actor_page(serial: int, page: int, count: int, rows: Array) -> void:
 	if host or not is_instance_valid(game.session) or not game.session.replica:
 		return
-	if serial<=applied_actor_frame or count<1 or count>16 or page<0 or page>=count or rows.size()>ACTORS_PER_PAGE:
+	if serial<=applied_actor_frame or count<1 or count>128 or page<0 or page>=count or rows.size()>ACTORS_PER_PAGE:
 		return
 	# Keep the last complete roster while up to two consecutive frames assemble.
 	for pending: int in actor_pages.keys():
@@ -1090,11 +1209,12 @@ func client_tick(session:WastelandSession,dt:float) -> void:
 	if not active() or host:
 		return
 	var p:=session.player
-	if session.controls_enabled:
+	var can_act := session.controls_enabled and not session.death_screen and not p.is_knocked_down()
+	if can_act:
 		p.look(p._stick_look()*Vector2(2.7,-2.16 if session.options.display.invert_y else 2.16)*dt)
 	var buttons:=0
 	var held:=0
-	if session.controls_enabled and not session.death_screen:
+	if can_act:
 		for i in range(KEYS.size()):
 			if Input.is_action_just_pressed(KEYS[i]):
 				buttons|=1<<i
@@ -1104,8 +1224,8 @@ func client_tick(session:WastelandSession,dt:float) -> void:
 	client_timer-=dt
 	if client_timer<=0.0:
 		client_timer=0.045
-		var axis:=Input.get_vector("left","right","up","down") if session.controls_enabled else Vector2.ZERO
-		_pilot.rpc_id(HOST_ID,axis,p.rotation.y,p.pitch,held,session.controls_enabled,bool(session.options.display.auto_step))
+		var axis:=Input.get_vector("left","right","up","down") if can_act else Vector2.ZERO
+		_pilot.rpc_id(HOST_ID,axis,p.rotation.y,p.pitch,held,can_act,bool(session.options.display.auto_step))
 		if local_pressed!=0:
 			_edges.rpc_id(HOST_ID,local_pressed)
 			local_pressed=0
@@ -1181,6 +1301,8 @@ func client_tick(session:WastelandSession,dt:float) -> void:
 		p.hand.recoil(held_item not in ["bow","field_crossbow"])
 		p.hand.shot_serial = shots
 	p.hand.animate(dt,minf(3.0,speed*0.11),p.crouch,session.atmosphere.sun_strength,p.hit_stop)
+	p.update_ragdoll_camera(dt)
+	p.update_live_avatar(dt)
 	p.hit_stop=maxf(0,p.hit_stop-dt)
 	_pose_party(session,dt)
 	_pose_actors(session,replica_actors,dt)
@@ -1192,7 +1314,10 @@ func _pose_party(session:WastelandSession,dt:float)->void:
 		if view.motion.is_empty(): continue
 		var row:=view.motion
 		var avatar:=view.avatar
-		avatar.visible=not bool(row.hidden)
+		avatar.visible=not bool(row.hidden) and not party_falls.current.has(row.peer)
+		if not avatar.visible:
+			view.lamp.hide()
+			continue
 		avatar.set_offhand(row.offhand,row.guard,row.flame)
 		avatar.global_position=avatar.global_position.lerp(row.at,1.0 if avatar.global_position.distance_to(row.at)>12.0 else minf(1.0,dt*12.0))
 		avatar.rotation.y=lerp_angle(avatar.rotation.y,float(row.yaw),minf(1.0,dt*14.0))
@@ -1240,17 +1365,35 @@ func _actor_motion(actor:WastelandCreature) -> Vector4i:
 	var surfaces := (slope.x<<24) | (slope.y<<16) | (impact.x<<8) | impact.y
 	return Vector4i(roundi(cycle*65535.0),roundi(actor.motion_speed*1000.0),flags,surfaces)
 
+func _creature_frame(actor: WastelandCreature) -> Array:
+	var row := [actor.spawn_serial, actor.type, actor.global_position, actor.rotation.y, actor.hp, actor.velocity,
+		actor.attack, actor.hurt, actor.windup, int(actor.attack_kind), actor.alerted, actor.morph,
+		actor.look_index, actor.wardrobe_index, actor.limb_index, actor.face_variant,
+		int(actor.brain.state), actor.brain.state_left, actor.brain.wake_span, actor.brain.rage_left,
+		actor.stage_health, actor.screamed, actor.limp_left,_actor_motion(actor)]
+	if actor.ragdoll != null or actor.limb_hit_serial > 0:
+		row.append_array([actor.ragdoll_impact,actor.ragdoll_hit_at,actor.ragdoll_hit_bone,actor.limb_hit_serial])
+	return row
+
 func _pose_actors(session:WastelandSession,rows:Array,delta:float) -> void:
 	actors_now.clear()
 	var fresh_frame := posed_actor_frame != applied_actor_frame
 	posed_actor_frame=applied_actor_frame
 	for tuple in rows:
 		var id:int=tuple[0]
+		var pose := PackedFloat32Array()
+		var at_rest: bool = tuple.size() == 1
+		if at_rest:
+			actors_now[id] = true
+			if not resting_creatures.has(id): continue
+			if smooth_actors.has(id) and smooth_actors[id].get_meta("rest_frame",-1) == resting_creatures[id].expires:
+				continue
+			tuple = resting_creatures[id].frame
+			pose = resting_creatures[id].pose
 		var spawning := not smooth_actors.has(id)
 		if spawning:
-			for actor in session.hordes.pool:
-				if actor.active:
-					continue
+			var actor: WastelandCreature = session.hordes.acquire_actor(tuple[1])
+			if actor:
 				actor.revive(tuple[1],tuple[2],false,{"hp":tuple[4], "morph":tuple[11] if tuple.size() > 11 else "",
 					"look_index":tuple[12] if tuple.size() > 12 else 0,
 					"wardrobe_index":tuple[13] if tuple.size() > 13 else 0,
@@ -1261,10 +1404,14 @@ func _pose_actors(session:WastelandSession,rows:Array,delta:float) -> void:
 				actor.collision_layer=4
 				actor.collision_mask=0
 				smooth_actors[id]=actor
-				break
 		if not smooth_actors.has(id):
 			continue
 		var actor:WastelandCreature=smooth_actors[id]
+		if at_rest:
+			actor.set_meta("rest_frame",resting_creatures[id].expires)
+		elif actor.has_meta("rest_frame"):
+			actor.remove_meta("rest_frame")
+			if actor.ragdoll != null: actor.ragdoll.kick(Vector3.ZERO)
 		actors_now[id]=true
 		actor.global_position=actor.global_position.lerp(tuple[2],minf(1,delta*11.0))
 		actor.rotation.y=lerp_angle(actor.rotation.y,float(tuple[3]),minf(1,delta*15.0))
@@ -1309,8 +1456,15 @@ func _pose_actors(session:WastelandSession,rows:Array,delta:float) -> void:
 				actor.impact_tilt=Vector2((sample.w>>8)&255,sample.w&255)/127.0-Vector2.ONE
 				var slope := Vector2((sample.w>>24)&255,(sample.w>>16)&255)/127.0-Vector2.ONE
 				actor.motion_floor_normal=Vector3(slope.x,sqrt(maxf(0.0,1.0-slope.length_squared())),slope.y).normalized()
+		actor.sync_ragdoll(pose,tuple[24] if tuple.size() > 24 else Vector3.ZERO,
+			tuple[25] if tuple.size() > 25 else Vector3.INF,tuple[26] if tuple.size() > 26 else &"")
+		if tuple.size() > 27 and (fresh_frame or spawning):
+			if spawning: actor.limb_hit_serial = tuple[27]
+			else: actor.mirror_limb_hit(tuple[27],tuple[24],tuple[25],tuple[26])
 		actor._pose(delta,actor.global_position.distance_to(session.player.global_position),travel)
 	for id in smooth_actors.keys():
 		if not actors_now.has(id):
-			smooth_actors[id].deactivate()
+			if smooth_actors[id].has_meta("rest_frame"):
+				smooth_actors[id].remove_meta("rest_frame")
+			session.hordes.release(smooth_actors[id])
 			smooth_actors.erase(id)

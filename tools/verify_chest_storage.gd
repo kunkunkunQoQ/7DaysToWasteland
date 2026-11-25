@@ -27,7 +27,7 @@ func run()->void:
 	s.simulation_paused=true
 	s.stream.ensure_landing(Vector3(-16,3,48))
 	var c:WastelandChunk=s.stream.active[WastelandSite.SHORE_CELL]
-	var key:String=c.supply_caches.keys()[0]
+	var key:String=c.object_key("container/0")
 	var model:Node3D=c.supply_caches[key]
 	var body:StaticBody3D=model.get_parent()
 	for i in 3: await physics_frame
@@ -144,6 +144,13 @@ func run()->void:
 	s.clock.hours+=100
 	s._open_loot(body)
 	check(s.chest_view(key).items.get("sledge",0)>=1 and diff.containers[key].next==s.clock.day()+2 and s.chest_view(key).items.size()>1,"ordinary restock preserves player property and adds fresh supplies")
+	var supplies: Dictionary = s.chest_view(key).items
+	var table: Dictionary = s.catalog.loot[s.catalog.sites.lodge.loots[0]]
+	var allowed := {"sledge":true}
+	for row: Array in table.items:
+		if s.hordes.stage() >= int(row[4]): allowed[row[0]] = true
+	check(supplies.get("sledge",0) == 1 and allowed.has_all(supplies.keys()) and table.staples.any(func(item): return supplies.has(item)),
+		"the retained sledge shares the refilled lake office chest with stage-eligible rescue supplies")
 	s.chest_close(key)
 	var snapshot:Dictionary=diff.containers[key].duplicate(true)
 	s.save_now(false)

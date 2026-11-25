@@ -62,7 +62,14 @@ func run() -> void:
 		var initial:=session.bag.count(sample)
 		if basic!="":
 			session.bag.assign("",0)
-			strike(body,9,0)
+			session.player.camera.global_position = body.global_position + Vector3.UP * 1.8
+			session.player.camera.look_at(body.global_position, Vector3.BACK)
+			await physics_frame
+			var contact := session._trace(2.58, 15, false, true, true)
+			var health := session.player.health
+			session._melee({}, 1.0)
+			var loss := 3.0 if kind == "iron_vein" else 4.0
+			check(contact.get("collider") == body and session.player.health == health - loss, "%s costs %d health even when it cannot be harvested" % [kind, loss])
 			check(not session.stream.chunk_diff(sites[kind][0]).get("resources",{}).has(sites[kind][1]),"bare hands cannot dismantle hard deposit: "+kind)
 			session.bag.assign(basic,0)
 		for i in 20:

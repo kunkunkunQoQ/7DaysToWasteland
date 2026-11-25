@@ -88,7 +88,7 @@ func _first_axe_note()->void:
 	preview_actor=null
 	selected_gathering=""
 	details.add_child(S.label("第一把石斧",23,S.GOLD))
-	details.add_child(S.label("低头找枯枝和碎石，按 [%s] 捡起。按 [%s] 打破草丛，走近掉在地上的纤维即可拾取。空拳敲打树干会伤手。" % [session.options.action_name("use"),session.options.action_name("fire")],18,S.TEXT,true))
+	details.add_child(S.label("低头找枯枝和碎石，按 [%s] 捡起。按 [%s] 打破草丛，走近地上的纤维即可拾取。空拳打树干每拳损失 2 点生命，打岩块损失 3 点，打钢板损失 4 点。" % [session.options.action_name("use"),session.options.action_name("fire")],18,S.TEXT,true))
 	details.add_child(S.label("随身制作材料 · "+session.catalog.requirements(session.catalog.recipes.stone_axe.inputs),17,S.MINT,true))
 	details.add_child(S.label("打开 [%s] → 制作，选石斧。做好后选中快捷栏里的石斧就能伐木。若快捷栏已满，可在背包里为石斧指定一格。" % session.options.action_name("inventory"),17,S.TEXT,true))
 	details.add_child(S.label("伐木后走近落枝和落叶即可收集。林地也能捡到零散落叶。阔叶和针叶都能扎成引火束、编遮阳斗篷，或在化学实验台制成燃料。",17,S.TEXT,true))

@@ -61,7 +61,6 @@ func _ready() -> void:
 	world_view.msaa_3d = Viewport.MSAA_DISABLED
 	world_view.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 	world_view.use_taa = false
-	world_view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	world_view.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_NEAREST
 	add_child(world_view)
 	_prepare_hands_view()
@@ -108,6 +107,14 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if is_headless:
 		return
+	if is_instance_valid(session) and session.preview_only:
+		var showing := world_image.is_visible_in_tree() and get_window().can_draw()
+		var mode := Node.PROCESS_MODE_INHERIT if showing else Node.PROCESS_MODE_DISABLED
+		if session.process_mode != mode:
+			session.process_mode = mode
+			world_view.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE if showing else SubViewport.UPDATE_DISABLED
+		if not showing:
+			return
 	_update_impact_vignette()
 	frame_ms = lerpf(frame_ms, delta * 1000.0, 0.035)
 	hud.last_frame_ms = frame_ms
@@ -218,6 +225,7 @@ func _default_config() -> Dictionary:
 func _show_title() -> void:
 	network.stop()
 	_remove_session()
+	world_view.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
 	session = WastelandSession.new()
 	world_view.add_child(session)
 	var backdrop_world := _default_config()
@@ -286,6 +294,7 @@ func connection_notice(words: String) -> void:
 
 func _enter_world(config: Dictionary, snapshot: Dictionary, slot: int, save_initial: bool) -> void:
 	_remove_session()
+	world_view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	session = WastelandSession.new()
 	world_view.add_child(session)
 	session.configure(config,snapshot,slot,catalog,options)
@@ -307,7 +316,7 @@ func _enter_world(config: Dictionary, snapshot: Dictionary, slot: int, save_init
 	if save_initial:
 		var result := session.save_now(true)
 		if result==OK and snapshot.is_empty():
-			_notify("空拳打树会伤手。看向地上的枯枝，按 [%s] 拾取。" % options.action_name("use"),5.5)
+			_notify("空拳打树会伤手，每拳损失 2 点生命，打岩石或金属伤得更重。按 [%s] 捡地上的枯枝和碎石。" % options.action_name("use"),5.5)
 	if pending_host_port!=0:
 		var port:=pending_host_port
 		pending_host_port=0

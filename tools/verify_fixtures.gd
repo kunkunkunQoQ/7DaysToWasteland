@@ -32,14 +32,31 @@ func run() -> void:
 	config.terrain_revision=2
 	open_world({})
 	var chest:=fixture(SHORE,"container/0")
+	check(chest.get_meta("cache_profile") == "shore", "starting fixture is a wooden shore chest")
 	var key: String=chest.get_meta("key")
 	var initial_hp:=float(chest.get_meta("hp"))
+	var health := session.player.health
+	session.player.camera.global_position = chest.global_position + Vector3.UP * 20.0
+	session.player.camera.look_at(chest.global_position, Vector3.BACK)
+	await physics_frame
+	check(session._trace(2.58, 15, false, true, true).is_empty(), "distant chest is beyond fist reach")
+	session._melee({}, 1.0)
+	check(session.player.health == health and float(chest.get_meta("hp")) == initial_hp, "a punch without contact costs no health")
 	session.player.camera.global_position=chest.global_position+Vector3(0,0,1.15)
 	session.player.camera.look_at(chest.global_position)
 	await physics_frame
 	session._melee({},1)
+	check(float(chest.get_meta("hp")) < initial_hp and session.player.health == health - 2.0 and session.player.injury.last_source == "hard_impact", "one bare-hand hit damages the chest and costs exactly two health")
+	session._melee({}, 1.8)
+	check(session.player.health == health - 4.0, "a charged fist hit costs another two health")
+	session.bag.add("stone_axe", 1)
+	session.bag.assign("stone_axe", 0)
+	session.bag.active = 0
+	var before_axe := float(chest.get_meta("hp"))
+	var hand_health := session.player.health
+	session._melee(session.catalog.items.stone_axe, 1.0)
 	var partial:=float(chest.get_meta("hp"))
-	check(partial>0 and partial<initial_hp,"aimed bare-hand swing damages an unopened chest")
+	check(partial > 0 and partial < before_axe and session.player.health == hand_health, "equipped axe damages the same hard chest without hurting the hand")
 	check(not session.stream.chunk_diff(SHORE).get("containers",{}).has(key),"partial damage leaves unopened loot untouched")
 	var partial_delta:=session.stream.diffs.duplicate(true)
 	check(session.save_now(false)==OK,"save partial fixture health")
@@ -103,6 +120,14 @@ func run() -> void:
 	check(session.progress.job==1 and session.progress.accepted,"rebuilt board accepts delivery and next job")
 	var safe:=fixture(POLICE,"container/99")
 	session.player.position=safe.global_position
+	session.bag.assign("", session.bag.active)
+	session.player.camera.global_position = safe.global_position + Vector3.UP * 1.4
+	session.player.camera.look_at(safe.global_position, Vector3.BACK)
+	await physics_frame
+	var metal_hit := session._trace(2.58, 15, false, true, true)
+	health = session.player.health
+	session._melee({}, 1.0)
+	check(safe.get_meta("cache_profile") == "town" and metal_hit.get("collider") == safe and session.player.health == health - 4.0, "metal town safe costs four health per punch")
 	session.progress.job=session.catalog.quests.size()-1
 	session.progress.accepted=true
 	shoot(safe,3000)

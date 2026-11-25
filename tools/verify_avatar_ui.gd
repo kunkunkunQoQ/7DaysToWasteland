@@ -141,7 +141,10 @@ func run()->void:
 	press(local,false)
 	await frames()
 	check(app.options.appearance=="surveyor","choosing a different survivor persists")
+	app.front.nickname_input.text = "山海旅人"
 	await click(button(app.front.shell,"返回开始页"))
+	character=app.front.shell.get_node("TitleSurvivor")
+	check(character.get_child(1).text=="山海旅人","title portrait shows the player's edited nickname after changing outfits")
 	for open:String in ["荒原图鉴","系统设置","存档管理"]:
 		await click(button(app.front.shell,open))
 		if open=="荒原图鉴":

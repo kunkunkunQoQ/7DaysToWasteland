@@ -107,7 +107,7 @@ func title(keep_cover := true) -> void:
 	var studio := preload("res://game/ui/model_study.gd").new()
 	character.add_child(studio)
 	studio.preview(game.options.appearance,{},true)
-	var person := S.label(WastelandPartyAvatar.NAMES[game.options.appearance],18,S.TEXT)
+	var person := S.label(game.options.player_name,18,S.TEXT)
 	person.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	person.add_theme_color_override("font_shadow_color", Color("#14221e"))
 	character.add_child(person)
@@ -213,7 +213,7 @@ func creation() -> void:
 	var speed := _range(right,"丧尸速度"," 倍",0.5,1.8,float(default.zombie_speed),0.1)
 	var difficulty := _range(right,"难度"," 倍",0.65,1.8,float(default.difficulty),0.05)
 	right.add_child(S.label("第一把石斧",17,S.GOLD))
-	right.add_child(S.label("按 [%s] 捡枯枝和碎石。打破草丛，捡植物纤维。集齐木棍 ×1、石料 ×2、纤维 ×2 后，打开 [%s] 制作石斧。空拳打树会伤手。" % [game.options.action_name("use"),game.options.action_name("inventory")],16,S.TEXT,true))
+	right.add_child(S.label("按 [%s] 捡枯枝和碎石，打草收集纤维。集齐木棍 ×1、石料 ×2、纤维 ×2 后，打开 [%s] 制作石斧。空拳打树每拳损失 2 点生命，打岩石或金属伤得更重。" % [game.options.action_name("use"),game.options.action_name("inventory")],16,S.TEXT,true))
 	var bar := S.line(box)
 	bar.add_child(S.button("返回", title))
 	S.fill(bar)
@@ -406,7 +406,14 @@ func pause() -> void:
 
 func died() -> void:
 	_reset("dead")
-	var box := _dialog("你倒在了荒原","遗落物资的位置已记在地图上。",474,292)
+	shade.material.set_shader_parameter("strength", 0.36)
+	game.show_depth_of_field(0)
+	var note := "可以在队友附近重新加入。" if game.session.replica else "遗落物资的位置已记在地图上。"
+	var box := _dialog("你倒在了荒原",note,398,265)
+	var card := box.get_parent() as Control
+	card.set_anchors_and_offsets_preset(Control.PRESET_CENTER_LEFT, Control.PRESET_MODE_KEEP_SIZE)
+	card.offset_left = 26.0
+	card.offset_right = 424.0
 	S.fill(box)
 	var revive := S.button("在队友附近复苏" if game.session.replica else "返回"+game.session.start_name(),func():
 		if game.session.replica: game.session.ui_command("revive")

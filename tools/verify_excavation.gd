@@ -41,6 +41,20 @@ func collision_error(cell:Vector2i)->float:
 	check(max_normal_angle<0.006,"hoof and foot support normals match both terrain triangles within 0.35 degrees")
 	return largest
 
+func punch_ground(at: Vector3, layer: String, loss: float) -> bool:
+	var camera := s.player.camera
+	var original := camera.transform
+	camera.global_position = at + Vector3.UP * 1.3
+	camera.look_at(at, Vector3.BACK)
+	var hit := s._trace(2.58, 15, false, true, true)
+	var terrain: bool = not hit.is_empty() and hit.collider.get_meta("kind", "") == "terrain" and s._dig_layer(hit.position)[0] == layer
+	if terrain:
+		var health := s.player.health
+		s._melee({}, 1.0)
+		check(s.player.health == health - loss, "a punch on %s costs %d health" % [layer, loss])
+	camera.transform = original
+	return terrain
+
 func run() -> void:
 	WastelandSave.root_override="user://verification/excavate-%d"%OS.get_process_id()
 	enter()
@@ -53,6 +67,12 @@ func run() -> void:
 	for i in 2: await physics_frame
 	check(collision_error(old_cell)<0.003,"900 off-grid rays match terrain before excavation")
 	check(st.generator.site_for(old_cell)=="lodge","fixture starts within the previously protected POI")
+	var soil := Vector3(old_cell.x * 32 + 1, 0, old_cell.y * 32 + 1)
+	soil.y = st.ground_at(soil)
+	check(punch_ground(soil, "泥土", 0.0), "punch reaches undisturbed soil")
+	var road := soil + Vector3.BACK * 22.0
+	road.y = st.ground_at(road)
+	check(punch_ground(road, "路面", 3.0), "punch reaches the paved road")
 	for i in 100: st.excavate(p)
 	check(is_equal_approx(float(st.digs[WastelandTerrainGen.grid_key(node)]),-58.0),"100 continuous strikes excavate 58 meters")
 	check(st.digs.size()==9,"stroke affects adjoining vertices as well as center")
@@ -80,6 +100,7 @@ func run() -> void:
 	var ray:=PhysicsRayQueryParameters3D.create(Vector3(p.x,original+2,p.z),Vector3(p.x,original-61,p.z),1)
 	var hit:=s.get_world_3d().direct_space_state.intersect_ray(ray)
 	check(not hit.is_empty() and absf(hit.position.y-original+58)<0.03,"physics surface reaches the regenerated pit floor")
+	check(not hit.is_empty() and punch_ground(hit.position, "岩层", 3.0), "punch reaches the exposed rock layer")
 	check(s.start_position().distance_to(initial)>1.0 and s.start_position().y>original-4,"spawn selects nearby land after the outpost spawn is undermined")
 	check(collision_error(old_cell)<0.003,"900 off-grid rays match terrain after digging 58 metres deep")
 	var deep:=Vector3(p.x,original-58.0+0.2,p.z)

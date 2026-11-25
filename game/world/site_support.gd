@@ -41,7 +41,7 @@ static func fittings(c:WastelandChunk,parts:Array,center:Vector3,span:float,id:S
 		else:
 			match c.site:
 				"hospital": bearing=roof_id(span,0,span*0.39)
-				"fuel": bearing="canopy" if i<4 else "pump/-1" if i<6 else "pump/1"
+				"fuel": bearing="canopy" if p.z>10.0 else "pump/-1" if p.x<0.0 else "pump/1"
 				"tower": bearing=c.ruin.tower_mast
 				"police","bunker":
 					if i<(7 if c.site=="police" else 15):
@@ -189,9 +189,8 @@ static func timber_roof(c:WastelandChunk,center:Vector3,span:float,roof_color:Co
 				fit(c,rafter,mid+Vector3(0,-0.14,end*depth*0.40),Vector3(run/cos(pitch),0.16,0.15),tilt,TIMBER,[[ridge,eave]],135)
 				rafters.append(rafter)
 			var plate:="roof/timber/%d/%d"%[side,bay]
-			fit(c,plate,mid,Vector3(run/cos(pitch),0.16,depth),tilt,roof_color.lightened(0.014*bay),[rafters],210)
-			for rib in 2:
-				WastelandSite._feature(c,mid+Vector3(0,0.095,(rib-0.5)*depth*0.83),Vector3(run/cos(pitch),0.042,0.049),tilt,roof_color.lightened(0.15),plate,210)
+			_roof_sheets(c,plate,mid,tilt,run/cos(pitch),depth,side,bay,roof_color)
+			bind(c,plate,[rafters])
 	# A snapped rafter rests on the ground beside the opening.
 	var x:=center.x-half-1.0
 	var z0:=center.z+c.ruin.end*(half-1.02)
@@ -202,3 +201,37 @@ static func timber_roof(c:WastelandChunk,center:Vector3,span:float,roof_color:Co
 	var axis:=finish-start
 	WastelandSite._feature(c,(start+finish)*0.5,Vector3(0.19,0.18,axis.length()),Basis.looking_at(axis,Vector3.UP),TIMBER.darkened(0.18),"ruin/fallen-rafter",60)
 	footing(c,"ruin/fallen-rafter",(start+finish)*0.5)
+
+# Three sheets meet at the ridge. Cutting them back individually exposes the rafter tails.
+static func _roof_sheets(c: WastelandChunk, id: String, mid: Vector3, pitch: Basis, length: float, depth: float,
+		side: int, bay: int, tone: Color) -> void:
+	var sheets: Array = []
+	var seams: Array = []
+	var lane := depth / 3.0
+	var repair_bay := 1 if c.ruin.end < 0 else 3
+	var damaged: bool = bay == repair_bay or (side == c.ruin.end and bay in [0,4])
+	for strip in 3:
+		var z := (strip - 1) * lane
+		var loss := 0.045 * posmod(strip + bay + side,3)
+		if damaged and strip == 2: loss = 0.66 + c.ruin.exposure * 0.28
+		elif damaged and strip == 1: loss = 0.32
+		var replacement := bay == repair_bay and strip == 0
+		var shade := tone.lerp(Color("#93674e"),0.12 + posmod(bay + strip + side,4) * 0.07)
+		if replacement: shade = Color("#82877a")
+		var sheet_center := mid + pitch * Vector3(-side * loss * 0.5,0,z)
+		# Adjacent lanes share an edge but never overlap coplanar top faces.
+		sheets.append([sheet_center,Vector3(length - loss,0.15,lane),shade,pitch])
+		seams.append([sheet_center + pitch * Vector3(0,0.084,-lane * 0.43),Vector3(length - loss - 0.04,0.051,0.039),shade.lightened(0.12),pitch])
+		if damaged and strip == 1:
+			var crease := sheet_center + pitch * Vector3(side * (length - loss) * 0.5,0,0)
+			var folded := pitch * Basis(Vector3.BACK,-side * 0.47)
+			sheets.append([crease + folded * Vector3(side * 0.19,0,0),Vector3(0.38,0.085,lane * 0.90),Color("#885f48"),folded])
+		if replacement:
+			# The bright square washer and shorter lap show where the existing iron was patched.
+			var mended := sheet_center + pitch * Vector3(side * length * 0.20,0.09,0)
+			seams.append([mended,Vector3(length * 0.26,0.036,lane * 0.85),Color("#77776a"),pitch])
+			for fastener: int in [-1,1]:
+				seams.append([mended + pitch * Vector3(side * length * 0.094,0.026,fastener * lane * 0.31),Vector3(0.057,0.021,0.067),Color("#554d43"),pitch])
+	var solid_count := sheets.size()
+	sheets.append_array(seams)
+	WastelandSite._cluster(c,id,sheets,210,solid_count)

@@ -16,19 +16,21 @@ func check(ok:bool,description:String)->void:
 		failures+=1
 		printerr("FAIL ",description)
 
-func verify_letters(owner:Node,expected:String,area:Vector2)->Label3D:
-	var label:=owner.find_child("PaintedLetters",true,false) as Label3D
+func verify_letters(owner:Node,expected:String,area:Vector2,node_name:="PaintedLetters")->Label3D:
+	var label:=owner.find_child(node_name,true,false) as Label3D
 	check(label!=null,expected+" has a painted surface")
 	if not label: return null
-	check(label.text.contains(expected) and label.font==WastelandUIStyle.FONT,expected+" uses the bundled Chinese font")
-	var font_rid:RID=WastelandUIStyle.FONT.get_rids()[0]
+	var variant:=label.font as FontVariation
+	var source:Font=variant.base_font if variant else label.font
+	check(label.text.contains(expected) and source==WastelandUIStyle.FONT,expected+" uses the bundled typeface")
+	var font_rid:RID=label.font.get_rids()[0]
 	var glyphs:=true
 	for i in label.text.length():
 		var code:=label.text.unicode_at(i)
-		if code>127 and not TextServerManager.get_primary_interface().font_has_char(font_rid,code):
+		if code!=10 and (code<32 or code>126 or not TextServerManager.get_primary_interface().font_has_char(font_rid,code)):
 			glyphs=false
 			printerr("Missing glyph ",label.text[i])
-	check(glyphs,expected+" contains only supported non-ASCII glyphs")
+	check(glyphs,expected+" uses supported English lettering")
 	check(label.get_meta("print_area",Vector2.ZERO).is_equal_approx(area),expected+" fits the actual sign panel design")
 	var mesh:=label.generate_triangle_mesh()
 	if not mesh:
@@ -95,8 +97,12 @@ func run()->void:
 		if child.get_meta("kind","")=="trader": board=child
 	var shelter:Vector3=Sites.survey(gen).points.shelter
 	await process_frame
-	var lintel:=verify_letters(sign,WastelandSite.station_name(gen,cell),Vector2(float(session.catalog.sites.lodge.span)*0.52,0.38))
-	var notice:=verify_letters(board,"公告",Vector2(1.18,0.20))
+	var lintel:=verify_letters(sign,"PRAIRIE STATION",Vector2(float(session.catalog.sites.lodge.span)*0.52,0.38))
+	var notice:=verify_letters(board,"STATION NOTICES",Vector2(1.06,0.18))
+	verify_letters(board,"MISSING",Vector2(0.25,0.25),"PaperNotice0")
+	verify_letters(board,"RATIONS",Vector2(0.25,0.25),"PaperNotice1")
+	verify_letters(board,"WANTED",Vector2(0.25,0.25),"PaperNotice2")
+	check(WastelandSite.station_name(gen,cell)=="草原驿站","the player's map and dispatch screens retain the localised station name")
 	await capture(lintel,true)
 	await capture(lintel,false)
 	if "--capture" in OS.get_cmdline_user_args():
@@ -112,12 +118,58 @@ func run()->void:
 	var salvage:=preload("res://game/world/structural_salvage.gd")
 	check(salvage.materials(snow,"expedition/shelter/plate").has("scrap") and salvage.materials(snow,"expedition/shelter/post").has("wood"),"expedition sign yields metal from its plate and wood from its post")
 	await process_frame
-	var route:=verify_letters(plate,"避风棚",Vector2(0.93,0.49))
-	if route: check(route.text.count("\n")==2 and route.text.contains("缓坡") and route.text.contains("近道"),"three lines preserve both route choices")
+	var route:=verify_letters(plate,"SNOWLINE SHELTER",Vector2(0.93,0.49))
+	if route:
+		check(route.text.count("\n")==2 and route.text.contains("Orange ring: sheltered slope") and route.text.contains("Blue pair: windy shortcut"),"three lines preserve both route choices")
+		await physics_frame
+		var eye:=plate.to_global(Vector3(0,0.39,1.6))
+		for x:float in [-0.43,0.0,0.43]:
+			var query:=PhysicsRayQueryParameters3D.create(eye,plate.to_global(Vector3(x,0,0)),3)
+			check(plate.get_world_3d().direct_space_state.intersect_ray(query).get("collider")==plate,"shelter posts leave all of the directions visible from the trail")
 	await remove_sign(plate,route)
+	await check_other_sites(gen)
 	await session.stream.quiesce()
 	await session.audio.finish_playback()
 	app.queue_free()
 	for i in 6: await process_frame
 	print("SITE SIGNS checks=",checks," failures=",failures)
 	quit(1 if failures else 0)
+
+func check_other_sites(gen:WastelandTerrainGen)->void:
+	var cells:Dictionary={}
+	for cell:Vector2i in WastelandTerrainGen.FIXED:
+		cells[gen.site_for(cell)]=cell
+	for z in range(-20,21):
+		for x in range(-20,21):
+			var cell:=Vector2i(x,z)
+			var site:=gen.site_for(cell)
+			if not site.is_empty() and not cells.has(site): cells[site]=cell
+		if cells.size()==session.catalog.sites.size(): break
+	check(cells.size()==session.catalog.sites.size(),"sample covers every building in the catalog")
+	cells["lodge"]=WastelandSite.SHORE_CELL
+	cells["foothills"]=gen.starting_outpost("foothills")
+	for cell:Vector2i in gen.nearby_outposts(Vector2.ZERO):
+		if cell not in [gen.starting_outpost("grassland"),gen.starting_outpost("foothills"),WastelandSite.SHORE_CELL]:
+			cells["outpost"]=cell
+			break
+	check(cells.has("outpost"),"sample includes an ordinary inland outpost")
+	for site:String in cells:
+		var cell:Vector2i=cells[site]
+		var at:=Vector2(cell*32)+Vector2(16,16)
+		session.stream.ensure_landing(Vector3(at.x,0,at.y))
+		var chunk:WastelandChunk=session.stream.active[cell]
+		var definition:Dictionary=session.catalog.sites[chunk.site]
+		var expected:String={"foothills":"FOOTHILL TIMBER CO.","outpost":"FRONTIER OUTPOST"}.get(site,definition.sign)
+		await process_frame
+		verify_letters(chunk.structures.sign[0],expected,Vector2(float(definition.span)*0.52,0.38))
+		if cell==WastelandSite.SHORE_CELL:
+			var board:Node=chunk.fixtures[chunk.object_key("trader")]
+			verify_letters(board,"HARBOR NOTICES",Vector2(1.06,0.18))
+			verify_letters(board,"LAST FERRY",Vector2(0.25,0.25),"PaperNotice2")
+	for id:String in Sites.INSCRIPTIONS:
+		if id=="shelter": continue
+		var at:Vector3=Sites.survey(gen).points[id]
+		session.stream.ensure_landing(at)
+		var chunk:WastelandChunk=session.stream.active[WastelandTerrainGen.chunk_at(Vector2(at.x,at.z))]
+		await process_frame
+		verify_letters(chunk.structures["expedition/"+id+"/plate"][0],Sites.INSCRIPTIONS[id],Vector2(0.93,0.49))

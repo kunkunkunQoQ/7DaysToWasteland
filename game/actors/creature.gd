@@ -6,6 +6,10 @@ const InfectedLooks := preload("res://game/art/infected_looks.gd")
 const Wardrobe := preload("res://game/art/infected_wardrobe.gd")
 const InfectedLimbs := preload("res://game/art/infected_limbs.gd")
 const InfectedMotion := preload("res://game/actors/infected_motion.gd")
+const PhysicalRagdoll := preload("res://game/actors/physical_ragdoll.gd")
+const ActiveMotion := preload("res://game/actors/active_ragdoll.gd")
+const RagdollHits := preload("res://game/actors/ragdoll_hits.gd")
+const CORPSE_SECONDS := PhysicalRagdoll.CORPSE_SECONDS
 const WARDROBE_COUNT := 3 * 3 * 4
 
 var director: Node3D
@@ -27,6 +31,17 @@ var hit_pause:=0.0
 var hurt := 0.0
 var visible_hurt := -1.0
 var impact_tilt := Vector2.ZERO
+var ragdoll: PhysicalRagdoll
+var active_motion: ActiveMotion
+var ragdoll_impact := Vector3.ZERO
+var ragdoll_hit_at := Vector3.INF
+var ragdoll_hit_bone: StringName = &""
+var limb_hit_serial := 0
+var ragdoll_start_frame := -1
+var corpse_hits_enabled := false
+var rise_from: Array[Transform3D] = []
+var rise_target: Array[Transform3D] = []
+var rise_time := 0.0
 var print_distance := 0.0
 var print_position := Vector3.ZERO
 var print_side := 1.0
@@ -105,6 +120,15 @@ func configure(owner_director: Node3D) -> void:
 	brain.configure(self)
 
 func revive(kind: String, point: Vector3, night_wave: bool, previous: Dictionary) -> void:
+	_stop_active_motion()
+	rise_from.clear()
+	rise_target.clear()
+	_clear_ragdoll()
+	ragdoll_impact = Vector3.ZERO
+	ragdoll_hit_at = Vector3.INF
+	ragdoll_hit_bone = &""
+	limb_hit_serial = 0
+	ragdoll_start_frame = -1
 	var next_morph := str(previous.get("morph",""))
 	var animal := bool(session.catalog.enemies[kind].get("animal",false))
 	if next_morph not in (["young","local"] if animal else ["armored","swift"]):
@@ -193,10 +217,13 @@ func revive(kind: String, point: Vector3, night_wave: bool, previous: Dictionary
 	hurtboxes.enable(hp > 0.0)
 	if not animal:
 		_posture()
-		hurtboxes.pose(self)
-	if brain.state == WastelandCreatureBrain.State.DEAD:
-		collision_layer = 0
-	elif type == "bloater" and hp <= 0.0:
+	hurtboxes.pose(self)
+	if brain.state in [WastelandCreatureBrain.State.DEAD, WastelandCreatureBrain.State.KNOCKDOWN]:
+		sync_ragdoll(previous.get("ragdoll_pose",PackedFloat32Array()), previous.get("ragdoll_impact",Vector3.ZERO),
+			previous.get("ragdoll_hit_at",Vector3.INF),previous.get("ragdoll_hit_bone",&""))
+		if ragdoll != null and not previous.get("ragdoll_settled",false) and not session.replica:
+			ragdoll.kick(Vector3.ZERO)
+	if type == "bloater" and hp <= 0.0 and brain.state != WastelandCreatureBrain.State.DEAD:
 		_prime_rupture(float(previous.get("fuse", spec.ai.fuse)))
 
 func display_name() -> String:
@@ -224,7 +251,7 @@ func wall_factor() -> float:
 	return 0.0 if biting() else melee_factor() * float(spec.get("breach_multiplier",1.0))
 
 func melee_origin() -> Vector3:
-	var joint := "head" if biting() else "hand_l" if limb_damage.y > 0 else "hand_r"
+	var joint := "head" if brain.animal or biting() else "hand_l" if limb_damage.y > 0 else "hand_r"
 	var bone := skeleton.find_bone(joint)
 	if bone == -1:
 		return global_position + Vector3.UP * body_height() * 0.54
@@ -249,6 +276,10 @@ func max_move_speed() -> float:
 	return speed * (1.0 - 0.17*(limb_damage.z+limb_damage.w))
 
 func deactivate() -> void:
+	_stop_active_motion()
+	rise_from.clear()
+	rise_target.clear()
+	_clear_ragdoll()
 	hit_pause=0.0
 	active = false
 	if is_instance_valid(blast_ring): blast_ring.hide()
@@ -294,6 +325,15 @@ func serialize() -> Dictionary:
 	row.stride_phase = fposmod(pose_phase,TAU)
 	if brain.animal:
 		row.wildlife_cycle = wildlife_cycle
+	if ragdoll != null:
+		row.ragdoll_pose = ragdoll_pose()
+		row.ragdoll_impact = ragdoll_impact
+		row.ragdoll_hit_at = ragdoll_hit_at
+		row.ragdoll_hit_bone = ragdoll_hit_bone
+		row.ragdoll_settled = ragdoll_settled()
+		row.fsm = brain.state
+		row.facing = rotation.y
+		row.state_left = brain.state_left
 	if fuse_left > 0.0: row.fuse = fuse_left
 	if not morph.is_empty():
 		row.morph = morph
@@ -325,6 +365,7 @@ func serialize() -> Dictionary:
 	return row
 
 func _rebuild_model() -> void:
+	_stop_active_motion()
 	gland = null
 	rest_contacts.clear()
 	limb_damage = InfectedLimbs.decode(limb_index)
@@ -444,7 +485,10 @@ func apply_trap_slow(seconds: float, movement_scale: float) -> void:
 	trap_scale = minf(trap_scale if trap_left > 0.0 else 1.0, clampf(movement_scale, 0.0, 1.0))
 	trap_left = maxf(trap_left, seconds)
 
-func hit_zone(zone: String, amount: float, origin: Vector3, heavy := false, stealth := false) -> void:
+func impact_bone(body: CollisionObject3D, shape_id: int, point: Vector3) -> StringName:
+	return hurtboxes.bone_at(body,shape_id,point)
+
+func hit_zone(zone: String, amount: float, origin: Vector3, heavy := false, stealth := false, hit_at := Vector3.INF, hit_bone: StringName = &"") -> void:
 	if not active or hp <= 0.0:
 		return
 	var knocked := false
@@ -460,36 +504,180 @@ func hit_zone(zone: String, amount: float, origin: Vector3, heavy := false, stea
 			limp_left = 3.5
 			leg_hits = 0
 			knocked = true
-	take_hit(amount, origin, heavy)
-	if hp > 0.0 and knocked:
-		brain.interrupt(true, 2.0)
+	take_hit(amount,origin,heavy,knocked,hit_at,hit_bone)
 
-func begin_death() -> void:
+func begin_death(impact := Vector3.ZERO, hit_at := Vector3.INF, hit_bone: StringName = &"") -> void:
+	if brain.state == WastelandCreatureBrain.State.DEAD:
+		return
 	hp = 0.0
 	brain._cancel_action()
 	brain.state = WastelandCreatureBrain.State.DEAD
-	brain.state_left = 3.0
+	brain.state_left = CORPSE_SECONDS
 	brain.rage_left = 0.0
 	brain.slot = -1
 	brain.slot_target = null
 	brain.seen = null
 	collision_layer = 0
 	hurtboxes.enable(false)
+	if ragdoll != null and not impact.is_zero_approx():
+		ragdoll.kick_at(impact,hit_at,hit_bone)
+	sync_ragdoll(PackedFloat32Array(),impact if not impact.is_zero_approx() else velocity,hit_at,hit_bone)
 	velocity = Vector3.ZERO
 	attack = 0.0
 	attack_kind = WastelandCreatureBrain.Action.NONE
 	windup = 0.0
 	if is_instance_valid(blast_ring): blast_ring.hide()
+	if is_instance_valid(scream_ring): scream_ring.hide()
 
-func take_hit(amount: float, origin: Vector3, heavy: bool = false) -> void:
+func physical_position() -> Vector3:
+	return ragdoll.center() if ragdoll != null else global_position
+
+func ragdoll_pose() -> PackedFloat32Array:
+	return ragdoll.pose_snapshot() if ragdoll != null else PackedFloat32Array()
+
+func ragdoll_settled() -> bool:
+	return ragdoll != null and ragdoll.is_settled()
+
+func sync_ragdoll(pose: PackedFloat32Array, impact := Vector3.ZERO, hit_at := Vector3.INF, hit_bone: StringName = &"") -> void:
+	if brain.state not in [WastelandCreatureBrain.State.DEAD, WastelandCreatureBrain.State.KNOCKDOWN]:
+		if ragdoll != null:
+			_start_rise(global_position)
+		return
+	if ragdoll == null:
+		ragdoll_start_frame = Engine.get_physics_frames()
+		rise_from.clear()
+		rise_target.clear()
+		ragdoll_impact = impact
+		ragdoll_hit_at = hit_at
+		ragdoll_hit_bone = hit_bone
+		if active_motion != null:
+			ragdoll = active_motion.let_go(impact,hit_at,hit_bone)
+			active_motion = null
+		else:
+			ragdoll = PhysicalRagdoll.new()
+			add_child(ragdoll)
+			if session is WastelandSession:
+				ragdoll.set_water_source(session.stream)
+			if not ragdoll.begin(skeleton,impact,hit_at,hit_bone):
+				_clear_ragdoll()
+				return
+		hurt = 0.0
+		visible_hurt = 0.0
+		for paint in render_colors.values():
+			paint.set_shader_parameter("hurt", 0.0)
+	collision_layer = 4 if brain.animal and hp > 0.0 else 0
+	collision_mask = 0
+	hurtboxes.enable(hp > 0.0)
+	if brain.state == WastelandCreatureBrain.State.DEAD and not corpse_hits_enabled:
+		RagdollHits.enable(ragdoll,true,"creature",spawn_serial)
+		corpse_hits_enabled = true
+	if not pose.is_empty():
+		ragdoll.apply_pose(pose)
+	_update_downed_hitboxes()
+
+func mirror_limb_hit(serial: int, impulse: Vector3, hit_at: Vector3, hit_bone: StringName) -> void:
+	if serial <= limb_hit_serial:
+		return
+	limb_hit_serial = serial
+	ragdoll_impact = impulse
+	ragdoll_hit_at = hit_at
+	ragdoll_hit_bone = hit_bone
+	# The transition to passive physics already applied this snapshot's strike.
+	if ragdoll != null:
+		if ragdoll_start_frame != Engine.get_physics_frames():
+			ragdoll.kick_at(impulse,hit_at,hit_bone)
+	elif active_motion != null:
+		active_motion.kick_at(impulse,hit_at,hit_bone)
+
+func record_limb_hit(impulse: Vector3, hit_at: Vector3, hit_bone: StringName) -> void:
+	limb_hit_serial += 1
+	ragdoll_impact = impulse
+	ragdoll_hit_at = hit_at
+	ragdoll_hit_bone = hit_bone
+
+func _update_downed_hitboxes() -> void:
+	if hp <= 0.0 or ragdoll == null:
+		return
+	if brain.animal:
+		# Observing wildlife still uses the body capsule. Weapons trace the individual bones.
+		collider.global_position = ragdoll.center()
+		var trunk := skeleton.get_bone_global_pose(0)
+		collider.global_basis = (skeleton.global_basis * trunk.basis).orthonormalized() * Basis(Vector3.RIGHT, PI * 0.5)
+	hurtboxes.pose(self)
+
+func _stop_active_motion() -> void:
+	if active_motion != null:
+		active_motion.stop_driving()
+		active_motion = null
+
+func _clear_ragdoll() -> void:
+	if ragdoll == null:
+		return
+	ragdoll.release()
+	ragdoll = null
+	corpse_hits_enabled = false
+	collider.transform = Transform3D(Basis.IDENTITY, Vector3.UP * capsule.height * 0.5)
+	if active and hp > 0.0:
+		collision_layer = 4 if brain.animal or session.replica else 4 | 128
+		collision_mask = 0 if session.replica else 3 | 8 if brain.animal else 3 | 8 | 128
+		hurtboxes.enable(true)
+
+func _recover_at() -> Vector3:
+	var center := physical_position()
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = capsule
+	query.collision_mask = 1 | 2 | 8
+	query.exclude = [get_rid()]
+	var space := get_world_3d().direct_space_state
+	# Try either side if the body came to rest against a wall or below an overhang.
+	for offset: Vector3 in [Vector3.ZERO,Vector3.RIGHT,Vector3.LEFT,Vector3.FORWARD,Vector3.BACK]:
+		var probe := center + offset * (capsule.radius + 0.20)
+		var down := brain.route.ray(probe + Vector3.UP * 0.55, probe - Vector3.UP * maxf(capsule.height,1.2), query.collision_mask)
+		if down.is_empty() or down.normal.y < cos(floor_max_angle):
+			continue
+		var foot: Vector3 = down.position + Vector3.UP * (0.035 + capsule.radius * (1.0 / down.normal.y - 1.0))
+		query.transform = Transform3D(Basis.IDENTITY,foot + Vector3.UP * capsule.height * 0.5)
+		if space.intersect_shape(query,1).is_empty():
+			return foot
+	return Vector3.INF
+
+func _start_rise(foot: Vector3) -> void:
+	# Preserve the fallen silhouette when the movement capsule returns to its feet.
+	rise_from.clear()
+	rise_target.clear()
+	for i in skeleton.get_bone_count():
+		rise_from.append(skeleton.get_bone_pose(i))
+	var pelvis_world := skeleton.global_transform * rise_from[0]
+	_clear_ragdoll()
+	global_position = foot
+	rise_from[0] = skeleton.global_transform.affine_inverse() * pelvis_world
+	for i in skeleton.get_bone_count():
+		rise_target.append(skeleton.get_bone_pose(i))
+	rise_time = 0.0
+
+func hand_impact_damage(zone: String, origin: Vector3, hit_bone: StringName = &"") -> int:
+	if not active or hp <= 0.0:
+		return 0
+	var plated := zone == "torso" and (hit_bone == &"" or hit_bone in [&"torso",&"hips",&"arm_l",&"arm_r"])
+	if (morph == "armored" and plated) or _blocking_shield_pieces(origin) > 0:
+		return 4
+	return 0
+
+func _blocking_shield_pieces(origin: Vector3) -> int:
+	if type != "bulwark" or brain.action != WastelandCreatureBrain.Action.NONE or attack >= 0.1:
+		return 0
+	var bearing := WastelandCreatureRoute.planar(origin - global_position).normalized()
+	if (-global_basis.z).dot(bearing) <= 0.45:
+		return 0
+	return int(limb_damage.x < 2) + int(limb_damage.y < 2)
+
+func take_hit(amount: float, origin: Vector3, heavy := false, knockdown := false, hit_at := Vector3.INF, hit_bone: StringName = &"") -> void:
 	if not active or hp <= 0.0:
 		return
-	if type == "bulwark" and brain.action == WastelandCreatureBrain.Action.NONE and attack < 0.1:
-		var bearing := WastelandCreatureRoute.planar(origin - global_position).normalized()
-		if (-global_basis.z).dot(bearing) > 0.45:
-			var shield_pieces := int(limb_damage.x < 2) + int(limb_damage.y < 2)
-			amount *= 1.0 - (0.16 if heavy else 0.35) * shield_pieces
-			session.audio.play_at("stone",global_position + Vector3.UP,0.68)
+	var shield_pieces := _blocking_shield_pieces(origin)
+	if shield_pieces > 0:
+		amount *= 1.0 - (0.16 if heavy else 0.35) * shield_pieces
+		session.audio.play_at("stone",global_position + Vector3.UP,0.68)
 	hp -= amount
 	hurt = 0.81
 	visible_hurt = hurt
@@ -499,8 +687,13 @@ func take_hit(amount: float, origin: Vector3, heavy: bool = false) -> void:
 	brain.provoke(origin)
 	windup = 0.0
 	attack_kind = WastelandCreatureBrain.Action.NONE
-	var dx := global_position - origin
-	dx.y = 0.0
+	if hit_at.is_finite() and hit_bone == &"":
+		hit_bone = impact_bone(null,-1,hit_at)
+	var dx := (hit_at if hit_at.is_finite() else physical_position()) - origin
+	if not hit_at.is_finite():
+		dx.y = 0.0
+	var push := dx.normalized() * (5.3 if heavy else 2.4) * (0.34 if type == "brute" else 1.0)
+	record_limb_hit(push,hit_at,hit_bone)
 	var local_push := global_basis.inverse() * dx.normalized()
 	impact_tilt = Vector2(local_push.z, -local_push.x) * (0.24 if heavy else 0.14)
 	if brain.animal:
@@ -512,16 +705,24 @@ func take_hit(amount: float, origin: Vector3, heavy: bool = false) -> void:
 		if hit_chain >= 3:
 			brain.try_rage()
 			hit_chain = 0
-	velocity += dx.normalized() * (5.3 if heavy else 2.4) * (0.34 if type == "brute" else 1.0)
-	session.fx.burst(global_position + Vector3.UP * float(spec.height) * 0.53,
+	if ragdoll != null:
+		ragdoll.kick_at(push,hit_at,hit_bone)
+	else:
+		velocity += push
+	session.fx.burst(hit_at if hit_at.is_finite() else global_position + Vector3.UP * float(spec.height) * 0.53,
 		Color("#8e3f59") if type != "radiant" else Color("#bcba63"), 1.16 if heavy else 0.67)
 	if hp <= 0.0:
 		if type == "bloater":
 			_prime_rupture(float(spec.ai.fuse))
 			session.audio.play_at("spit_tell",global_position + Vector3.UP,1.35)
 		else:
-			director.defeated(self)
+			director.defeated(self,hit_at,hit_bone)
 	else:
+		if knockdown or (heavy and amount >= minf(22.0, max_health() * 0.15)):
+			brain.interrupt(true, 2.0)
+			sync_ragdoll(PackedFloat32Array(),velocity + Vector3.UP * 0.55,hit_at,hit_bone)
+		elif active_motion != null:
+			active_motion.kick_at(push,hit_at,hit_bone)
 		session.audio.play_at("hit", global_position + Vector3.UP * 0.61, 0.56)
 
 func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSurvivor] = []) -> void:
@@ -533,8 +734,8 @@ func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSu
 	if not active:
 		return
 	if brain.state == WastelandCreatureBrain.State.DEAD:
+		_fade_hit_flash(delta)
 		brain.state_left = maxf(0.0, brain.state_left - delta)
-		_pose(delta, global_position.distance_to(player.global_position), 0.0)
 		if brain.state_left <= 0.0:
 			director.release(self)
 		return
@@ -544,6 +745,29 @@ func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSu
 		_pose(delta,global_position.distance_to(player.global_position),0.0)
 		if fuse_left == 0.0:
 			director.rupture(self)
+		return
+	if ragdoll != null and brain.state == WastelandCreatureBrain.State.KNOCKDOWN:
+		_fade_hit_flash(delta)
+		brain.state_left = maxf(0.0,brain.state_left - delta)
+		limp_left = maxf(0.0,limp_left - delta)
+		_update_downed_hitboxes()
+		if brain.state_left <= 0.0:
+			var foot := _recover_at()
+			if not foot.is_finite():
+				brain.state_left = 0.2
+				if physical_position().y < -34.0 and session.stream.below_terrain(physical_position()):
+					director.release(self)
+				return
+			_start_rise(foot)
+			fall_peak = foot.y
+			velocity = Vector3.ZERO
+			ground_step = false
+			surface_retry = 0.0
+			stagger = 0.0
+			brain.state = WastelandCreatureBrain.State.WANDER if brain.animal else WastelandCreatureBrain.State.CHASE
+			brain.sense_left = 0.0
+			brain.route.clear_plan()
+			_pose(0.15,global_position.distance_to(player.global_position),0.0)
 		return
 	stagger = maxf(0.0, stagger - delta)
 	limp_left = maxf(0.0, limp_left - delta)
@@ -706,6 +930,10 @@ func stride_length(speed: float) -> float:
 	return lerpf(1.18,2.30,smoothstep(0.55,4.15,speed))*clampf(float(spec.height)/1.74,0.65,1.40)
 
 func _pose(delta: float, distance: float, travel := -1.0) -> void:
+	if ragdoll != null:
+		_fade_hit_flash(delta)
+		_update_downed_hitboxes()
+		return
 	# Preview actors walk in place. World actors supply the distance that physics actually allowed.
 	motion_distance += travel if travel >= 0.0 else Vector2(velocity.x,velocity.z).length()*delta
 	phase_clock += delta
@@ -714,12 +942,16 @@ func _pose(delta: float, distance: float, travel := -1.0) -> void:
 		return
 	var span := phase_clock
 	phase_clock = 0.0
-	hurt = maxf(0.0, hurt - span * 4.4)
+	var drive := not motion_preview and get_parent() == director and session is WastelandSession and ActiveMotion.wanted(session,global_position,active_motion)
+	if active_motion != null:
+		if drive:
+			active_motion.restore_targets()
+		else:
+			_stop_active_motion()
+	for i in rise_target.size():
+		skeleton.set_bone_pose(i,rise_target[i])
+	_fade_hit_flash(span)
 	rig.rotation = Vector3(impact_tilt.x, 0.0, impact_tilt.y) * (hurt / 0.81)
-	if absf(visible_hurt-hurt) > 0.02:
-		visible_hurt=hurt
-		for paint in render_colors.values():
-			paint.set_shader_parameter("hurt", hurt)
 	var measured_speed := motion_distance/span
 	var blend := 1.0-exp(-15.0*span)
 	motion_speed = lerpf(motion_speed,measured_speed,blend)
@@ -839,7 +1071,31 @@ func _pose(delta: float, distance: float, travel := -1.0) -> void:
 		InfectedMotion.support(self)
 		_posture(span)
 
-		hurtboxes.pose(self)
+	if not rise_from.is_empty():
+		rise_time += span
+		var weight := smoothstep(0.0,0.38,rise_time)
+		for i in rise_from.size():
+			rise_target[i] = skeleton.get_bone_pose(i)
+			skeleton.set_bone_pose(i,rise_from[i].interpolate_with(rise_target[i],weight))
+		if weight >= 1.0:
+			rise_from.clear()
+			rise_target.clear()
+	if drive:
+		if active_motion == null:
+			active_motion = ActiveMotion.start(self,skeleton,session.stream)
+			if active_motion != null:
+				active_motion.pose_applied.connect(hurtboxes.pose.bind(self))
+		else:
+			active_motion.capture_targets()
+	hurtboxes.pose(self)
+
+func _fade_hit_flash(delta: float) -> void:
+	if hurt == 0.0 and visible_hurt == 0.0: return
+	hurt = maxf(0.0,hurt-delta*4.4)
+	if absf(visible_hurt-hurt) > 0.02 or hurt == 0.0:
+		visible_hurt = hurt
+		for paint in render_colors.values():
+			paint.set_shader_parameter("hurt",hurt)
 
 func _posture(span := 0.0) -> void:
 	var tilt := 0.0

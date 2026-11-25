@@ -128,6 +128,9 @@ func revive(previous: Dictionary) -> void:
 			state_left = maxf(0.0, float(previous.get("state_left", 0.0)))
 		if retreat_left > 0.0:
 			goal = previous.get("retreat_goal", actor.global_position)
+	elif int(previous.get("fsm",state)) in [State.KNOCKDOWN, State.DEAD]:
+		state = int(previous.fsm) as State
+		state_left = maxf(0.0,float(previous.get("state_left",0.0)))
 
 func _wake(point: Vector3) -> void:
 	if state != State.SLEEPING:
@@ -141,7 +144,7 @@ func _wake(point: Vector3) -> void:
 	actor.session.audio.play_at("growl", _eyes(), 0.55)
 
 func interrupt(knockdown: bool, duration: float) -> void:
-	if animal or state in [State.DEAD, State.SLEEPING, State.WAKING]:
+	if state == State.DEAD or ((animal or state in [State.SLEEPING, State.WAKING]) and not knockdown):
 		return
 	_cancel_action()
 	if state == State.KNOCKDOWN and not knockdown:
@@ -167,15 +170,16 @@ func retreat_from(point: Vector3) -> void:
 	_cancel_action()
 	route.clear_plan()
 	rage_left = 0.0
-	state_left = 0.0
-	actor.stagger = 0.0
+	if state != State.KNOCKDOWN:
+		state_left = 0.0
+		actor.stagger = 0.0
+		state = State.WANDER
 	actor.alerted = false
 	seen = null
 	slot = -1
 	memory = 0.0
 	interest = Vector3.INF
 	mode = Mode.ROAM
-	state = State.WANDER
 	retreat_left = 8.0
 	pursuing_cue = false
 	var away := WastelandCreatureRoute.planar(actor.global_position - point).normalized()
@@ -392,7 +396,7 @@ func _survey(player: WastelandSurvivor, teammates: Array[WastelandSurvivor]) -> 
 
 func _pursue(target: WastelandCreature) -> void:
 	mode = Mode.PURSUE
-	goal = target.global_position
+	goal = target.physical_position()
 	if actor.global_position.distance_squared_to(goal) > 1.6 or cooldown > 0.0:
 		return
 	actor.attack = 1.0
@@ -400,11 +404,22 @@ func _pursue(target: WastelandCreature) -> void:
 	target.brain.provoke(actor.global_position)
 	target.hurt = 0.56
 	target.hp -= 18.0 if actor.type == "wolf" else 9.0
+	var mouth := actor.melee_origin()
+	var contact: Dictionary = target.hurtboxes.closest_contact(mouth)
+	var touch: Vector3 = contact.get("at",target.physical_position())
+	var bone: StringName = contact.get("bone",&"")
+	var push := mouth.direction_to(touch) * 2.2
+	target.record_limb_hit(push,touch,bone)
 	if target.hp <= 0.0:
-		actor.director.release(target)
+		target.begin_death(push,touch,bone)
+		actor.director.retain_corpse(target)
 		hunt_pause = 24.0
 		goal = Vector3.INF
 		mode = Mode.ROAM
+	elif target.ragdoll != null:
+		target.ragdoll.kick_at(push,touch,bone)
+	elif target.active_motion != null:
+		target.active_motion.kick_at(push,touch,bone)
 
 func _can_see(player: WastelandSurvivor) -> bool:
 	if not _alive(player):
@@ -672,7 +687,9 @@ func _update_attack(delta: float) -> void:
 		Action.MELEE:
 			if _within_melee(locked_target, attack_heading, reach + 0.12):
 				var source := "heavy" if actor.type == "brute" and not actor.biting() else "radiation" if actor.type == "radiant" else "claw"
-				locked_target.damage(float(actor.spec.hit) * actor.melee_factor() * difficulty, source, actor.melee_origin())
+				var hand := actor.melee_origin()
+				var ratio := 0.22 if actor.low_crawl() or actor.type == "crawler" else 0.55
+				locked_target.damage(float(actor.spec.hit) * actor.melee_factor() * difficulty,source,hand,locked_target.surface_toward(hand,ratio))
 		Action.SMASH:
 			var contact := route.strike_wall(reach + 0.12)
 			if not contact.is_empty() and contact.collider == locked_wall:
@@ -734,7 +751,9 @@ func _charge(delta: float) -> Vector3:
 	charge_left = maxf(0.0, charge_left - delta)
 	desired_facing = attack_heading
 	if _within_melee(locked_target, attack_heading, reach):
-		locked_target.damage(float(actor.spec.hit) * actor.melee_factor() * float(actor.session.world_settings.difficulty) * 1.30, "boar" if actor.type == "boar" else "claw", actor.global_position)
+		var front := actor.melee_origin()
+		var contact: Vector3 = locked_target.surface_toward(front,0.28 if actor.type == "boar" else 0.5)
+		locked_target.damage(float(actor.spec.hit) * actor.melee_factor() * float(actor.session.world_settings.difficulty) * 1.30, "boar" if actor.type == "boar" else "claw",front,contact)
 		locked_target = null
 	if actor.is_on_wall() or charge_left == 0.0:
 		charge_left = 0.0

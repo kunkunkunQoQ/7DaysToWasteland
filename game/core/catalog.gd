@@ -55,11 +55,13 @@ func requirements(need: Dictionary) -> String:
 		words.append("%s ×%d" % [title(id), int(need[id])])
 	return "、".join(words)
 
-func roll_loot(table: String, seed_value: int, abundance: float, stage: int, draw_limit: int = -1) -> Dictionary:
+func roll_loot(table: String, seed_value: int, abundance: float, stage: int, draw_limit: int = -1, allowed_items: Array = []) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	var definition: Dictionary = loot.get(table, loot.get("cabin", {}))
 	var rows: Array = definition.get("items", [])
+	if not allowed_items.is_empty():
+		rows = rows.filter(func(row: Array) -> bool: return row[0] in allowed_items)
 	if rows.is_empty():
 		return {}
 	var result: Dictionary = {}

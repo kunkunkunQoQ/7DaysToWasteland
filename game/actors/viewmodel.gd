@@ -423,6 +423,19 @@ func animate(delta: float, pace: float, duck: float, light: float, hit_stop: flo
 		brightness = light
 		_apply_light()
 
+func apply_hand_contacts(right_camera: Vector3, left_camera: Vector3) -> void:
+	# The display rig shares the physical wrists' deflection while keeping its
+	# authored grips and sight line in the separate first-person viewport.
+	var right := right_camera.limit_length(0.13)
+	var left := left_camera.limit_length(0.13)
+	if is_instance_valid(resting_left):
+		var view_to_model := model.basis.inverse()
+		right_hand.position += view_to_model * right
+		resting_left.position += view_to_model * left
+	else:
+		model.position += right
+	if offhand_root.visible: offhand_root.position += left
+
 func _pose_empty_hands(pace: float) -> void:
 	swimming_fingers = swim_blend > 0.40
 	var grip := "open" if swimming_fingers else "fist" if guard_left>0.0 else "relaxed"

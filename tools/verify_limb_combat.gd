@@ -83,5 +83,5 @@ func _special_organs() -> void:
 	bloater.take_hit(999,player.global_position)
 	await _ticks(115,[bloater])
 	check(bloater.brain.state==BRAIN.State.DEAD and player.injury.last_source=="rupture","prone bloater retains its fuse and damages nearby survivors")
-	await _ticks(182,[bloater])
+	bloater.think(WastelandCreature.CORPSE_SECONDS+0.1,player)
 	check(not bloater.active,"the ruptured crawler returns to the pool after its death pose")

@@ -18,13 +18,21 @@ static func fit(body: StaticBody3D, site: String, member: String, size: Vector3,
 					parts.append([Vector3(0, face + 0.018, z), Vector3(size.x, 0.044, 0.056), color.darkened(0.23)])
 				var edge := -1 if member.ends_with("-1") else 1
 				parts.append([Vector3(edge*(size.x*0.5-0.04), face, 0), Vector3(0.10,0.105,size.z), Color("#6e6353")])
+				# One slope was patched with a piece of galvanised roofing. Its
+				# crimped edge follows the pitch of the original sheet.
+				if edge == (1 if wear % 2 == 0 else -1):
+					var patch := Vector3(edge * size.x * 0.25, face + 0.054, size.z * 0.19)
+					parts.append([patch, Vector3(1.10,0.037,0.83),Color("#868b7e")])
+					for rib in 4:
+						parts.append([patch+Vector3(0,0.024,(rib-1.5)*0.21),Vector3(1.12,0.036,0.036),Color("#6f756b")])
 			elif member == "windbreak":
 				for row in 6:
 					var y := (row - 2.5)*0.244
 					var split := -0.82 + 0.61 * posmod(row + wear, 4)
 					for side: int in [-1, 1]:
 						var end := size.x * side * 0.5
-						parts.append([Vector3((end+split)*0.5,y,0), Vector3(absf(end-split)-0.018,0.221,size.z+0.045), WOOD.darkened(0.06*posmod(row+side+wear,4))])
+						var board := WOOD.lerp(Color("#a59c87"), 0.12 * posmod(row+side+wear,4))
+						parts.append([Vector3((end+split)*0.5,y,0), Vector3(absf(end-split)-0.018,0.221,size.z+0.045), board])
 				for x: float in [-1.38, 1.38]:
 					parts.append([Vector3(x,0,0.137), Vector3(0.13,1.41,0.075), WOOD.darkened(0.34)])
 			elif member.begins_with("ridgepost"):
@@ -48,6 +56,10 @@ static func fit(body: StaticBody3D, site: String, member: String, size: Vector3,
 				for board in 8:
 					var x := size.x*(board-3.5)/8.0
 					parts.append([Vector3(x,-0.012,0),Vector3(size.x/8.0-0.017,size.y-0.035,size.z+0.034),WOOD.darkened(0.07*posmod(board+wear,4))])
+					var tide := -0.22 + 0.021 * sin(board * 1.7 + wear)
+					parts.append([Vector3(x,tide, size.z*0.5+0.020),Vector3(size.x/8.0-0.017,0.044,0.012),Color("#bfaa86")])
+					if (board + wear) % 3 != 0:
+						parts.append([Vector3(x+0.035,tide-0.15,size.z*0.5+0.021),Vector3(size.x*0.079,0.041,0.012),Color("#938777"),Basis.IDENTITY,0.75])
 				for x: float in [-0.75,0.75]:
 					parts.append([Vector3(x,0,0.13),Vector3(0.13,1.47,0.063),IRON])
 					for y: float in [-0.53,0.48]:
@@ -68,6 +80,8 @@ static func fit(body: StaticBody3D, site: String, member: String, size: Vector3,
 				for i in stones:
 					var z := size.z*((i+0.5)/stones-0.5)
 					parts.append([Vector3(0,size.y*0.44,z),Vector3(size.x+0.052,0.13,size.z/stones-0.035),color.lightened(0.07*posmod(i+wear,3))])
+					var inward := 1 if member.ends_with("-1") else -1
+					parts.append([Vector3(inward * (size.x*0.5+0.004),-0.07+0.013*sin(i+wear),z),Vector3(0.014,0.07,size.z/stones-0.015),Color("#bcac91"),Basis.IDENTITY,0.89])
 		"well":
 			if member == "pipe":
 				for h: float in [-0.77,0.16,0.67]:

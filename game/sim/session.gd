@@ -17,6 +17,7 @@ const LANDING_CARGO := {
 }
 const VEHICLE_SALVAGE := {"scrap":4,"parts":1}
 const Chest := preload("res://game/art/supply_chest.gd")
+const StructuralSalvage := preload("res://game/world/structural_salvage.gd")
 const SaplingPlanting := preload("res://game/sim/sapling_planting.gd")
 var timber := preload("res://game/sim/timber.gd").new()
 var grove := preload("res://game/sim/grove.gd").new()
@@ -24,6 +25,9 @@ const Fire := preload("res://game/sim/station_fire.gd")
 const OutpostOrders := preload("res://game/sim/outpost_orders.gd")
 const Patrol := preload("res://game/sim/relay_patrol.gd")
 const Expeditions := preload("res://game/sim/expeditions.gd")
+const TitleWildlife := preload("res://game/world/title_wildlife.gd")
+const PartyFalls := preload("res://game/net/party_falls.gd")
+const RagdollHits := preload("res://game/actors/ragdoll_hits.gd")
 
 const LOOSE_MATERIALS := {"boulder":{"stone":3}, "ore":{"stone":3}}
 const HARVEST_TOOLS := {"cactus":"field_sickle","herb_patch":"field_sickle","reed_bed":"field_sickle","iron_vein":"iron_pick","machine_wreck":"salvage_wrench"}
@@ -122,11 +126,14 @@ var tracked_row := {}
 var recent_trails: Array = []
 var starting_cell := WastelandSite.SHORE_CELL
 var preview_camera: Camera3D
+var preview_wildlife: TitleWildlife
 var preview_time := 0.0
 var preview_index := -1
 var preview_eye := Vector3.ZERO
 var preview_target := Vector3.ZERO
 var preview_hour := 0.0
+var preview_travel := 0.0
+var preview_clearance := 1.4
 var network: Node
 var replica := false
 var actor_peer_id := WastelandLan.HOST_ID
@@ -172,6 +179,8 @@ func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data:
 	world_settings = config.duplicate()
 	clock.configure(config, snapshot)
 	preview_only = preview
+	set_process(preview)
+	set_physics_process(not preview)
 	slot = slot_number
 	add_child(atmosphere)
 	add_child(stream)
@@ -180,7 +189,19 @@ func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data:
 	stream.loot_day = clock.day()
 	stream.start(int(config.seed), catalog, atmosphere, snapshot, preview, int(config.get("terrain_revision", 1)))
 	stream.generator.site_revision = int(config.get("site_revision",0)) if stream.generator.revision>=3 else 0
-	if stream.generator.revision>=3 and not preview and str(world_settings.get("start_id","seeded"))=="random":
+	if preview:
+		preview_camera = Camera3D.new()
+		preview_camera.name = "LandscapeCamera"
+		preview_camera.far = 230.0
+		preview_camera.near = 0.08
+		preview_camera.fov = 61.0
+		add_child(preview_camera)
+		preview_camera.make_current()
+		preview_wildlife = TitleWildlife.new()
+		preview_wildlife.name = "TitleWildlife"
+		add_child(preview_wildlife)
+		return
+	if stream.generator.revision>=3 and str(world_settings.get("start_id","seeded"))=="random":
 		if not world_settings.has("spawn_point"):
 			if not world_settings.has("spawn_roll"):
 				world_settings.spawn_roll = stream.generator.seed_at(Vector2i.ZERO,6187)
@@ -191,15 +212,6 @@ func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data:
 		starting_cell = stream.generator.starting_outpost(str(world_settings.get("start_id","seeded")))
 	NavigationServer3D.map_set_edge_connection_margin(get_world_3d().navigation_map, 0.52)
 	var initial := start_position()
-	if preview:
-		preview_camera = Camera3D.new()
-		preview_camera.name = "LandscapeCamera"
-		preview_camera.far = 230.0
-		preview_camera.near = 0.08
-		preview_camera.fov = 72.0
-		add_child(preview_camera)
-		preview_camera.make_current()
-		return
 	progress = WastelandProgression.new(snapshot.get("progress", {}))
 	var old_threat:Dictionary=snapshot.get("threat",{})
 	if not snapshot.get("progress",{}).has("quest_revision") and int(old_threat.get("died",0))>0 and int(old_threat.get("cleared",0))>0 and old_threat.cleared==old_threat.get("event",0):
@@ -243,9 +255,13 @@ func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data:
 	player = WastelandSurvivor.new()
 	add_child(player)
 	player.configure(self, snapshot.get("player", {}), initial)
+	player.ragdoll_changed.connect(_player_fell.bind(player))
+	player.ragdoll_struck.connect(_player_part_hit.bind(player))
 	audio.listener = player.camera
 	grove.configure(self)
 	stream.prime(player.global_position)
+	stream.lake_wildlife.restore_combat(snapshot.get("lake_combat",{}))
+	stream.lake_wildlife.impact_changed.connect(_lake_impact_changed)
 	timber.configure(self, snapshot.get("falling_trees",{}))
 	if snapshot.is_empty() or stream.below_terrain(player.global_position):
 		player.position.y = stream.ground_at(player.global_position) + 0.12
@@ -257,6 +273,7 @@ func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data:
 		player.ride(vehicles[snapshot.mounted])
 	if player.health <= 0.0:
 		respawn()
+	PartyFalls.restore_corpses(self,snapshot.get("survivor_corpses",[]))
 
 func start_position() -> Vector3:
 	var spawn := WastelandTerrainGen.START
@@ -291,19 +308,33 @@ func frame_landscape(index: int) -> void:
 	preview_eye = frame.eye
 	preview_target = frame.target
 	preview_hour = frame.hour
+	preview_travel = frame.travel
+	preview_clearance = frame.clearance
 	clock.hours = preview_hour
 	preview_camera.position = preview_eye
 	preview_camera.look_at(preview_target)
-	preview_camera.fov = 61.0
-	var focus := preview_eye.lerp(preview_target,0.40)
-	if stream.ready_for_streaming:
-		stream.refresh(focus,3)
-		stream.ensure_landing(focus)
-	else:
-		stream.radius = 3
-		stream.prime(focus)
-	stream.ensure_landing(preview_eye)
+	stream.frame_preview(preview_camera, preview_eye.lerp(preview_target, 0.40))
+	preview_wildlife.configure(stream, catalog, frame.wildlife)
+	preview_wildlife.advance(preview_camera, preview_time, 0.0)
 	atmosphere.sync(clock,0.0,preview_eye,-preview_camera.global_basis.z)
+
+func _process(delta: float) -> void:
+	if preview_index < 0: return
+	preview_time += delta
+	clock.elapsed += delta
+	clock.hours = preview_hour + 0.35 * sin(preview_time * 0.055)
+	var forward := preview_target - preview_eye
+	forward.y = 0.0
+	forward = forward.normalized()
+	var across := forward.cross(Vector3.UP)
+	var slide := sin(preview_time * 0.18) * preview_travel
+	var push := (1.0 - cos(preview_time * 0.18)) * minf(0.36, preview_travel * 0.2)
+	var eye := preview_eye + across * slide + forward * push
+	eye.y = maxf(eye.y, stream.ground_at(eye) + preview_clearance)
+	preview_camera.position = eye
+	preview_camera.look_at(preview_target + across * slide * 0.15)
+	preview_wildlife.advance(preview_camera, preview_time, delta)
+	atmosphere.sync(clock, delta, eye, -preview_camera.global_basis.z)
 
 func _station_name(cell: Vector2i) -> String:
 	return WastelandSite.station_name(stream.generator,cell)
@@ -368,16 +399,6 @@ func _lake_point(start: Vector2) -> Vector3:
 func _physics_process(delta: float) -> void:
 	if stream.generator == null:
 		return
-	if preview_only:
-		if preview_index<0: return
-		preview_time += delta
-		clock.elapsed += delta
-		clock.hours = preview_hour+0.16*sin(preview_time*0.020)
-		var across := (preview_target-preview_eye).cross(Vector3.UP).normalized()
-		preview_camera.position = preview_eye+across*(0.52*sin(preview_time*0.12))+Vector3.UP*(0.12*sin(preview_time*0.085))
-		preview_camera.look_at(preview_target+across*(0.21*sin(preview_time*0.08)))
-		atmosphere.sync(clock, delta, preview_camera.position, -preview_camera.global_basis.z)
-		return
 	if replica:
 		network.client_tick(self,delta)
 		grove.tick(delta)
@@ -392,17 +413,21 @@ func _physics_process(delta: float) -> void:
 		if error != OK and error != last_autosave_error:
 			notify("自动保存失败，将重试 · 错误 %d" % error)
 		last_autosave_error = error
-	if simulation_paused or death_screen:
+	if simulation_paused:
 		return
+	if death_screen:
+		player.update_ragdoll_camera(delta)
+		if not is_instance_valid(network) or not network.server():
+			hordes.tick_corpses(delta)
+			return
 	if world_save_at_ms == 0:
 		_schedule_world_save(WORLD_SAVE_INTERVAL_MS)
 	clock.advance(delta)
 	stream.advance_loot_day(clock.day())
 	action_lock = maxf(0, action_lock - delta)
-	player.simulate(delta, controls_enabled)
-	achievements.tick(delta)
-	if death_screen:
-		return
+	if not death_screen:
+		player.simulate(delta, controls_enabled)
+		achievements.tick(delta)
 	var at := player.global_position
 	stream.refresh(at, clampi(int(options.display.radius), 2, 6),guest_positions())
 	atmosphere.sync(clock, delta, player.camera.global_position, -player.camera.global_basis.z, audio)
@@ -425,7 +450,7 @@ func _physics_process(delta: float) -> void:
 		Patrol.tick(self)
 		_sync_vehicles()
 		for person:WastelandSurvivor in living_players(): _discover_site(person)
-	if controls_enabled:
+	if controls_enabled and not death_screen and not player.is_knocked_down():
 		_process_controls(delta)
 	else:
 		loot_target = null
@@ -437,7 +462,7 @@ func _physics_process(delta: float) -> void:
 		network.host_tick(self,delta)
 
 func mouse_look(screen_delta: Vector2) -> void:
-	if not controls_enabled or simulation_paused or death_screen or player == null:
+	if not controls_enabled or simulation_paused or death_screen or player == null or player.is_knocked_down():
 		return
 	var scale := float(options.display.sensitivity)
 	var invert := -1.0 if options.display.invert_y else 1.0
@@ -654,17 +679,20 @@ func _use_offhand() -> void:
 	if used: player.offhand_cooldown=0.36
 
 func weapon_hit(from:Vector3, to:Vector3, excluded:Array[RID])->Dictionary:
-	var query:=PhysicsRayQueryParameters3D.create(from,to,15 | 32,excluded)
+	var query:=PhysicsRayQueryParameters3D.create(from,to,15 | 32 | RagdollHits.LAYER,excluded)
 	query.collide_with_areas=true
 	var space:=get_world_3d().direct_space_state
 	var hit:=space.intersect_ray(query)
 	# Movement capsules fill gaps around the limbs. Only the separate hurt areas count.
 	while hit.get("collider") is WastelandCreature:
 		var creature:WastelandCreature=hit.collider
-		if creature.type in WastelandHordes.WILDLIFE: break
 		excluded.append(creature.get_rid())
 		query.exclude=excluded
 		hit=space.intersect_ray(query)
+	var lake := stream.lake_wildlife
+	if is_instance_valid(lake):
+		var wildlife := lake.weapon_hit(from, to if hit.is_empty() else hit.position)
+		if not wildlife.is_empty(): return wildlife
 	return hit
 
 func _trace(length: float, mask: int, water: bool = false, nature := false, weapon := false) -> Dictionary:
@@ -880,7 +908,7 @@ func _update_prompt(held: String) -> void:
 				elif resource in PICKUPS:
 					hint="[%s] 拾取%s · %s"%[use,RESOURCES[resource][0],catalog.requirements(RESOURCES[resource][2])]
 				elif _uses_fists(held) and resource in ["oak","pine"]:
-					hint="[%s] 徒手砍树 · 每拳损失 2 生命"%fire
+					hint="[%s] 徒手砍树 · 每拳损失 %d 生命" % [fire, _hand_impact_damage(object, interaction.position)]
 				elif object.has_meta("tree_model"):
 					hint="[%s] 砍伐%s" % [fire,timber.NAMES.get(object.get_meta("tree_model"),RESOURCES[resource][0])]
 					if focus_damage<0.36: hint+=" · 即将倾倒"
@@ -889,7 +917,7 @@ func _update_prompt(held: String) -> void:
 					if picked.has(object.get_meta("index")):
 						hint = "%s · 余下部分需用工具采集" % RESOURCES[resource][0]
 					else:
-						hint = "[%s] 敲落松石" % fire
+						hint = "[%s] 敲落松石 · 每拳损失 %d 生命" % [fire, _hand_impact_damage(object, interaction.position)]
 			"poi_wall":
 				if object.has_meta("timber_wall"):
 					var reach:=float(catalog.items.get(held,{}).get("reach",2.58))
@@ -1105,6 +1133,8 @@ func _tick_loot(delta: float) -> void:
 func _cache_title(object: Object) -> String:
 	var table: String = object.get_meta("type")
 	var category: String = catalog.loot[table].name
+	if object.get_meta("building_cache",false):
+		return "任务保险柜 · "+category if object.get_meta("quest",false) else category
 	var profile: String = object.get_meta("cache_profile","")
 	if not Chest.NAMES.has(profile): return category
 	if table == profile+"_cache" or object.has_meta("submerged_site") or table == "cabin": return Chest.NAMES[profile]
@@ -1134,11 +1164,17 @@ func _container_record(object: StaticBody3D) -> Dictionary:
 			loot_stage=2+(tier-1)*6
 		var abundance := float(world_settings.loot) * (1.0 + progress.rank("scavenger") * 0.15)
 		record = {"items":catalog.roll_loot(loot_id, seed_value, abundance, loot_stage), "next":-1 if submerged else clock.day()+int(world_settings.loot_days), "earned":false,"searched":true}
-		var regional_table := str(object.get_meta("cache_biome",object.get_meta("cache_profile","")))+"_cache"
-		if loot_id != regional_table and catalog.loot.has(regional_table):
-			var regional := catalog.roll_loot(regional_table,seed_value^54173,abundance,loot_stage,1)
-			for supply in regional:
-				record.items[supply] = int(record.items.get(supply,0))+int(regional[supply])
+		var bonus_table := str(object.get_meta("cache_biome",object.get_meta("cache_profile","")))+"_cache"
+		var staples: Array = []
+		if object.get_meta("building_cache",false):
+			bonus_table = loot_id
+			staples = catalog.loot[loot_id].get("staples",[])
+		elif loot_id == bonus_table:
+			bonus_table = ""
+		if catalog.loot.has(bonus_table):
+			var bonus := catalog.roll_loot(bonus_table,seed_value^54173,abundance,loot_stage,1,staples)
+			for supply in bonus:
+				record.items[supply] = int(record.items.get(supply,0))+int(bonus[supply])
 		if object.get_meta("quest", false):
 			record.items.beacon_log = 1
 		if not stored.is_empty():
@@ -1178,6 +1214,7 @@ func apply_chest_lids(keys:Array)->void:
 	cache_inventory.apply_lids(self,keys)
 
 func _melee(item: Dictionary, power: float) -> void:
+	if replica: return
 	var cost := float(item.get("stamina_cost",5.6)) * (2.2 if power>1.2 else 1.0)
 	if item.get("kind","")=="tool":
 		cost *= 1.0-bag.gear_bonus("tool_saving")
@@ -1193,10 +1230,20 @@ func _melee(item: Dictionary, power: float) -> void:
 		return
 	player.hit_stop=0.045
 	player.impact_kick=0.105
-	var body: Object = hit.collider
 	var amount := float(item.get("damage", 9.0)) * power * (1.0 + progress.rank("melee") * 0.17)
+	var punching: bool = _uses_fists(bag.current()) and item.get("kind", "") in ["", "material"]
+	if _strike_remains(hit,player.camera.global_position,amount): return
+	if hit.has("aquatic"):
+		var landed := _strike_lake_wildlife(hit,amount,player,player.global_position,power>1.35 or item.get("bouncy",false),true)
+		if landed and punching and int(hit.get("hand_damage",0)) > 0:
+			player.hurt_hand(int(hit.hand_damage),"hard_impact")
+		return
+	var body: CollisionObject3D = hit.collider
+	if body.is_queued_for_deletion(): return
+	var hand_damage := _hand_impact_damage(body, hit.position, int(hit.get("shape",-1))) if punching else 0
+	var hit_bark: bool = body.get_meta("resource", "") in ["oak", "pine"]
 	if body.has_meta("hit_zone") or body is WastelandCreature:
-		_strike_creature(body,amount,player,power>1.35 or item.get("bouncy",false),true)
+		_strike_creature(hit,amount,player,power>1.35 or item.get("bouncy",false),true)
 		if item.get("bouncy",false): audio.play_at("bow",hit.position,0.8,false)
 	elif body is WastelandVehicle:
 		_damage_vehicle(body,amount,hit.position,hit.normal)
@@ -1238,6 +1285,36 @@ func _melee(item: Dictionary, power: float) -> void:
 					notify("已开垦 · 选中种子交互")
 				audio.play_at("stone", hit.position, 0.53)
 				fx.burst(hit.position, Color("#9e786e"), 0.40)
+	if hand_damage > 0:
+		player.hurt_hand(hand_damage, "bark" if hit_bark else "hard_impact")
+
+func _hand_impact_damage(body: CollisionObject3D, at: Vector3, shape_id := -1) -> int:
+	if body.has_meta("hit_zone"):
+		var creature := body.get_parent() as WastelandCreature
+		if not creature: return 0
+		var bone := creature.impact_bone(body,shape_id,at) if shape_id >= 0 else &""
+		return creature.hand_impact_damage(body.get_meta("hit_zone"), player.global_position,bone)
+	var material := ""
+	match str(body.get_meta("kind", "")):
+		"resource":
+			match str(body.get_meta("resource")):
+				"pebble": return 1
+				"oak", "pine", "driftwood": material = "wood"
+				"boulder", "ore", "bedrock", "iron_vein": material = "stone"
+				"machine_wreck", "salvage": material = "scrap"
+		"stump", "trader": material = "wood"
+		"vehicle": material = "metal"
+		"buoy": return 2
+		"block": material = construction.surface_material(body.get_meta("block"))
+		"loot": material = Chest.casing_material(body.get_meta("cache_profile", ""))
+		"poi_wall":
+			var chunk: WastelandChunk = stream.active.get(body.get_meta("cell"))
+			var site := chunk.site if chunk != null else ""
+			return StructuralSalvage.hand_impact_damage(body, site)
+		"terrain":
+			if body.has_meta("rock_surface") or _dig_layer(at)[1]:
+				material = "stone"
+	return StructuralSalvage.material_hand_damage(material) if not material.is_empty() else 0
 
 func _fresh_snow(at: Vector3) -> bool:
 	var sample:=Vector2i(roundi(at.x),roundi(at.z))
@@ -1296,8 +1373,6 @@ func _harvest(body: StaticBody3D, amount: float, tool: int, impact: Vector3, pic
 	var cut := {}
 	if trunk:
 		cut = timber.mark(body, impact, 1.0 - after / float(row[1]), harvest)
-	if kind in ["oak","pine"] and punching and after<before:
-		player.bark_scrape()
 	if specialist:
 		if not harvest.has("specialist_work"):
 			harvest.specialist_work={}
@@ -1378,8 +1453,7 @@ func hit_wall(body: StaticBody3D, amount: float, contact:=Vector3.INF, normal:=V
 				var record := _container_record(body)
 				contents = record.items.duplicate()
 				record.items.clear()
-				var shell := str(body.get_meta("cache_profile",""))
-				var casing := "wood" if shell in ["forest","alpine","shore","ferry"] else "scrap"
+				var casing := Chest.casing_material(body.get_meta("cache_profile",""))
 				contents[casing]=int(contents.get(casing,0))+1
 				if not contents.is_empty() and not record.earned:
 					gain(21,"loot")
@@ -1420,7 +1494,7 @@ func hit_wall(body: StaticBody3D, amount: float, contact:=Vector3.INF, normal:=V
 			stream.nav_dirty[loc] = true
 		var chunk: WastelandChunk = stream.active.get(loc)
 		if chunk!=null and chunk.structures.has(id):
-			var salvage := preload("res://game/world/structural_salvage.gd").materials(chunk,id) if hp<=0 else {}
+			var salvage := StructuralSalvage.materials(chunk,id) if hp<=0 else {}
 			chunk.set_structure_health(id,hp,hp<=0 and chunk.support_graph.has(id))
 			if hp<=0:
 				drop_materials(at,salvage,normal)
@@ -1489,7 +1563,8 @@ func _shoot(id: String, item: Dictionary) -> void:
 	hordes.add_heat(origin, 0.62 if bow else 6.8)
 	player.emit_noise(origin, 9.0 if bow else 35.0)
 
-func _strike_creature(body:Object, amount:float, source:Node3D, heavy:bool, melee:=false)->void:
+func _strike_creature(hit:Dictionary, amount:float, source:Node3D, heavy:bool, melee:=false)->void:
+	var body: Object = hit.collider
 	var zone:=str(body.get_meta("hit_zone","torso"))
 	var actor:=body as WastelandCreature if body is WastelandCreature else body.get_parent() as WastelandCreature
 	if not is_instance_valid(actor) or not actor.active or actor.hp<=0: return
@@ -1497,23 +1572,49 @@ func _strike_creature(body:Object, amount:float, source:Node3D, heavy:bool, mele
 	var shooter:=source as WastelandSurvivor
 	var stealth:=is_instance_valid(shooter) and shooter.crouch>=0.8 and not actor.alerted
 	if body.has_meta("hit_zone"):
-		actor.hit_zone(zone,amount,origin,heavy,stealth)
+		var bone := actor.impact_bone(body,int(hit.get("shape",-1)),hit.position)
+		actor.hit_zone(zone,amount,origin,heavy,stealth,hit.position,bone)
 	else:
 		actor.take_hit(amount,origin,heavy)
 	if is_instance_valid(shooter):
 		if melee: actor.hit_pause=0.045
-		shooter.confirmed_hit+=1
-		shooter.confirmed_head=zone=="head"
-		shooter.confirmation_left=0.19
-		shooter.confirmed_melee=melee
+		_confirm_hit(shooter,zone=="head",melee)
+
+func _confirm_hit(shooter: WastelandSurvivor, head: bool, melee: bool) -> void:
+	shooter.confirmed_hit += 1
+	shooter.confirmed_head = head
+	shooter.confirmation_left = 0.19
+	shooter.confirmed_melee = melee
+
+func _strike_lake_wildlife(hit: Dictionary, amount: float, source: Node3D, origin: Vector3, heavy: bool, melee: bool) -> bool:
+	if not stream.lake_wildlife.strike(hit,amount,origin,heavy): return false
+	if source is WastelandSurvivor: _confirm_hit(source,false,melee)
+	audio.play_at("hit",hit.position,0.50)
+	return true
+
+func _lake_impact_changed() -> void:
+	if not replica:
+		_schedule_world_save()
+		if is_instance_valid(network) and network.server():
+			network.mirror_lake_combat(stream.lake_wildlife)
+
+func _strike_remains(hit: Dictionary, origin: Vector3, amount: float) -> bool:
+	var motion := RagdollHits.strike(hit,origin,amount)
+	if motion.is_empty(): return false
+	if is_instance_valid(network) and network.server(): network.mirror_corpse_hit(motion)
+	return true
 
 func projectile_hit(kind: String, damage: float, hit: Dictionary, source: Node3D, origin: Vector3 = Vector3.INF) -> void:
+	if _strike_remains(hit,origin,damage): return
+	if hit.has("aquatic"):
+		_strike_lake_wildlife(hit,damage,source,origin,false,false)
+		return
 	var body: Object = hit.collider
 	var normal:Vector3=hit.get("normal",Vector3.UP)
 	if kind == "acid":
 		fx.burst(hit.position, Color("#abc876"), 1.15)
 		if body is WastelandSurvivor:
-			body.damage(damage, "acid", origin)
+			body.damage(damage, "acid", origin,hit.position)
 		elif body is WastelandVehicle:
 			for person:WastelandSurvivor in living_players():
 				if person.mount_vehicle==body:
@@ -1526,7 +1627,7 @@ func projectile_hit(kind: String, damage: float, hit: Dictionary, source: Node3D
 			hit_wall(body,damage*1.15,hit.position,normal)
 		return
 	if body.has_meta("hit_zone") or body is WastelandCreature:
-		_strike_creature(body,damage,source,false)
+		_strike_creature(hit,damage,source,false)
 	else:
 		fx.burst(hit.position, Color("#cda694"), 0.48)
 		if body is StaticBody3D:
@@ -2096,6 +2197,7 @@ func player_died(victim: WastelandSurvivor = null) -> void:
 			return
 	if death_screen:
 		return
+	player.begin_death_ragdoll()
 	deaths += 1
 	if clock.horde_active():
 		hordes.event_deaths += 1
@@ -2121,6 +2223,7 @@ func player_died(victim: WastelandSurvivor = null) -> void:
 	save_now(false)
 
 func respawn() -> void:
+	player.reset_ragdoll()
 	death_screen = false
 	player.position = start_position()
 	stream.ensure_landing(player.position)
@@ -2144,6 +2247,27 @@ func respawn() -> void:
 	player.body_temp = 36.7
 	notify("已返回"+start_name()+" · 地图标记了遗落物资")
 
+func _player_fell(mode: int, impact: Vector3, person: WastelandSurvivor) -> void:
+	# Damage callbacks select the victim's inventory and input context before firing.
+	if mode != 0 and player == person:
+		heavy_charge = 0.0
+		heavy_pending = false
+		loot_target = null
+		loot_ratio = 0.0
+		focus_damage = -1.0
+		hint = ""
+		reload_id = ""
+		reload_left = 0.0
+		construction.tool_jobs.erase(person.get_instance_id())
+	if is_instance_valid(network) and not replica:
+		network.survivor_fell(self, person, mode, impact)
+	elif not replica:
+		PartyFalls.capture(person, WastelandLan.HOST_ID, mode, impact)
+
+func _player_part_hit(impact: Vector3, at: Vector3, bone: StringName, person: WastelandSurvivor) -> void:
+	if is_instance_valid(network) and network.server():
+		network.mirror_player_hit(person,impact,at,bone)
+
 func save_now(report: bool) -> Error:
 	if slot <= 0 or preview_only or replica or remote_actor or not is_instance_valid(player):
 		return ERR_UNCONFIGURED
@@ -2152,6 +2276,8 @@ func save_now(report: bool) -> Error:
 		network.store_guests(self)
 	var snapshot := {
 		"guests":guest_states,
+		"survivor_corpses":PartyFalls.save_corpses(self),
+		"lake_combat":stream.lake_wildlife.combat_snapshot(),
 		"falling_trees":timber.snapshot(),
 		"settings":world_settings, "time":clock.hours,"elapsed":clock.elapsed,
 		"bag":bag.snapshot(),"player":player.snapshot(),"progress":progress.snapshot(),
@@ -2190,6 +2316,8 @@ func _near_station(cell: Vector3i) -> bool:
 	return construction.blocks.has(cell) and construction.blocks[cell].device!="" and player.global_position.distance_to(WastelandConstruction.position_of(cell))<5.8
 
 func apply_ui_command(id: String, args: Array) -> void:
+	if player.is_knocked_down() and id not in ["save","chest_close","marker","unmark"]:
+		return
 	match id:
 		"offhand":
 			if args.size()==1 and args[0] is String: bag.set_offhand(args[0])

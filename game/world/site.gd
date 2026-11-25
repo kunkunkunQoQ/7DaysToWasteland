@@ -9,18 +9,25 @@ const ROOF_THICKNESS := 0.28
 const ROOF_OVERHANG := 0.55
 const Facades := preload("res://game/world/site_facades.gd")
 const Support:=preload("res://game/world/site_support.gd")
+const Signs := preload("res://game/world/painted_sign.gd")
 const BOARD_POSITION := Vector2(-18.6, 50.5)
 const SHORE_CELL := Vector2i(-1,1)
 const STARTS := {"seeded":"随种子","grassland":"草原驿站","foothills":"山麓林场"}
+const OUTPOST_SIGNS := {"grassland":"PRAIRIE STATION","foothills":"FOOTHILL TIMBER CO.","outpost":"FRONTIER OUTPOST"}
+# Legacy fixed layouts parked these container IDs outside the building.
+const VEHICLE_CACHE_SLOT := {"fuel":0, "tower":0, "garage":2}
 
 static func board_at(cell: Vector2i) -> Vector2:
 	return BOARD_POSITION+Vector2((cell-SHORE_CELL)*WastelandTerrainGen.SIZE)
 
+static func _outpost_id(gen: WastelandTerrainGen, cell: Vector2i) -> String:
+	for id: String in ["grassland","foothills"]:
+		if cell==gen.starting_outpost(id): return id
+	return "outpost"
+
 static func station_name(gen: WastelandTerrainGen, cell: Vector2i) -> String:
 	if cell==SHORE_CELL: return "湖务站"
-	for id: String in ["grassland","foothills"]:
-		if cell==gen.starting_outpost(id): return STARTS[id]
-	return "荒原前哨"
+	return STARTS.get(_outpost_id(gen,cell),"荒原前哨")
 
 static func starter_dressing(chunk: WastelandChunk, rows: Array) -> Array:
 	var additions := rows.duplicate()
@@ -136,11 +143,13 @@ static func populate(chunk: WastelandChunk, definition: Dictionary, pad: float) 
 	if wood:
 		_gabled_roof(chunk, center, span, color, trim)
 		if chunk.ruin.condition:
-			Support.fit(chunk,"chimney",center+Vector3(2.4,2.92,-2.02),Vector3(0.76,5.84,0.76),Basis.IDENTITY,Color("#8d5851"),[[Support.floor_id(span,0,2.4,-2.02)]],235)
+			_chimney(chunk,center+Vector3(2.4,2.92,-2.02),Vector3(0.76,5.84,0.76),"chimney",235)
+			Support.bind(chunk,"chimney",[[Support.floor_id(span,0,2.4,-2.02)]])
 		else:
-			var stack:=_feature(chunk, center + Vector3(2.4, 4.85, -2.02), Vector3(0.86, 2.03, 0.83), Basis.IDENTITY, Color("#8d5851"))
-			stack.set_meta("salvage_material","brick")
-			Support.bind(chunk,Support.key(stack),[["roof/1"]])
+			var at := center + Vector3(2.4,4.85,-2.02)
+			var stack_id := _fixture_key(at)
+			_chimney(chunk,at,Vector3(0.86,2.03,0.83),stack_id,145)
+			Support.bind(chunk,stack_id,[["roof/1"]])
 			chunk.ruin.roof_bearings=[["roof/1"],["roof/-1"]]
 	elif site != "tower":
 		if chunk.ruin.condition:
@@ -174,16 +183,17 @@ static func populate(chunk: WastelandChunk, definition: Dictionary, pad: float) 
 	if chunk.ruin.condition:
 		for x:float in [-0.66,0.66]:
 			_feature(chunk,center+Vector3(x,sign_at.y-0.16,span*0.5+0.18),Vector3(0.15,0.55,0.26),Basis.IDENTITY,trim,"sign",75)
-	var sign_name: String = station_name(chunk.stream.generator,chunk.cell) if inland else definition.name
-	preload("res://game/world/painted_sign.gd").facade(sign,sign_name,span*0.56,chunk.ruin.condition,hash([chunk.stream.generator.seed_value,chunk.cell]))
+	var station := _outpost_id(chunk.stream.generator,chunk.cell) if inland else ""
+	var sign_name: String = OUTPOST_SIGNS[station] if inland else definition.sign
+	Signs.facade(sign,sign_name,span*0.56,chunk.ruin.condition,chunk.stream.generator.seed_at(chunk.cell,385),site)
+	var loot_rows: Array = definition.outpost_loots[station] if inland else definition.loots
 	if chunk.stream.generator.site_revision>0:
-		preload("res://game/world/site_caches.gd").populate(chunk,center,definition)
+		preload("res://game/world/site_caches.gd").populate(chunk,center,definition,loot_rows)
 	else:
-		var loot_rows: Array = definition.loots
 		for index in loot_rows.size():
 			var level := mini(heights - 1, floori(float(index) / 2.0))
 			var at := center + Vector3(-3.4 + 6.6 * (index % 2), 0.48 + 3.05 * level, -span * 0.24 + float(index % 3) * 1.4)
-			if loot_rows[index] == "trunk":
+			if index == VEHICLE_CACHE_SLOT.get(site,-1):
 				at = center + Vector3(-6.8, 0.65, 6.6)
 			_loot(chunk, index, loot_rows[index], at)
 	var note_text: String = "沿山路找邻近的中继站。柜里的日志要带回驻地，由公告板登记。" if inland else definition.note
@@ -212,6 +222,7 @@ static func populate(chunk: WastelandChunk, definition: Dictionary, pad: float) 
 		var posts:Array=[]
 		for i in [-1, 1]:
 			var pump:=_feature(chunk, center + Vector3(i * 2., 0.85, 8.5), Vector3(0.62, 1.70, 0.61), Basis.IDENTITY, Color("#a55750"),"pump/"+str(i) if chunk.ruin.condition else "")
+			_pump_jacket(pump,i)
 			pump.set_meta("salvage_components",{"scrap":0.09,"parts":0.035})
 			Support.footing(chunk,Support.key(pump),pump.position)
 			var x:float=i*3.5 if i>0 else 4.9-canopy_length
@@ -223,7 +234,7 @@ static func populate(chunk: WastelandChunk, definition: Dictionary, pad: float) 
 	if site in ["fuel", "police", "hospital"]:
 		_car(chunk, center + Vector3(-8.0, 0.38, 6.3))
 	if site in ["tower", "hospital"] or (site == "police" and (chunk.cell == Vector2i(3, -1) or chunk.stream.generator.revision>=3)):
-		_loot(chunk, 99, "safe", center + Vector3(0.4, 0.55 + (heights - 1) * 3.05, -3.8), true)
+		_loot(chunk, 99, definition.archive_loot, center + Vector3(0.4, 0.55 + (heights - 1) * 3.05, -3.8), true)
 	_facade(chunk,center,span,color,trim,heights,wood)
 	Facades.roof_plant(chunk,center,span,heights)
 	if site != "lodge":
@@ -242,6 +253,22 @@ static func populate(chunk: WastelandChunk, definition: Dictionary, pad: float) 
 		var breach:=center+Vector3(-span*0.5,FLOOR_TOP,(chunk.ruin.entrance_bay-2)*span*0.2)
 		_entrance_ramp(chunk,breach,Vector3.LEFT,span*0.2,floor_tone,"entrance/breach",wood)
 	chunk.ruin.debris(chunk,center,color)
+	preload("res://game/art/site_weathering.gd").dress(chunk,center)
+
+static func _chimney(chunk: WastelandChunk, at: Vector3, size: Vector3, id: String, hp: int) -> void:
+	var brick := Color("#845d4d")
+	var crown := at + Vector3.UP * size.y * 0.5
+	var parts := [[at,size,brick]]
+	# The corbel projects past the stack; one loose front brick has fallen from the flue rim.
+	parts.append([crown + Vector3.UP * 0.025,Vector3(size.x + 0.11,0.12,size.z + 0.11),brick.darkened(0.16)])
+	for edge: int in [-1,1]:
+		parts.append([crown + Vector3(edge * (size.x * 0.5 - 0.05),0.19,0),Vector3(0.16,0.22,size.z + 0.06),brick.lerp(Color("#504b42"),0.44)])
+	parts.append([crown + Vector3(0,0.19,-size.z * 0.5 + 0.04),Vector3(size.x - 0.25,0.22,0.15),brick.darkened(0.24)])
+	parts.append([crown + Vector3(-size.x * 0.17,0.16,size.z * 0.5 - 0.04),Vector3(size.x * 0.32,0.16,0.15),brick])
+	var solid_count := parts.size()
+	parts.append([crown + Vector3.UP * 0.091,Vector3(size.x - 0.25,0.011,size.z - 0.17),Color("#393834")])
+	var stack := _cluster(chunk,id,parts,hp,solid_count)
+	stack.set_meta("salvage_material","brick")
 
 static func board_door(chunk: WastelandChunk, at: Vector3, width: float, id: String) -> void:
 	var parts := []
@@ -297,6 +324,11 @@ static func _gabled_roof(chunk: WastelandChunk, center: Vector3, span: float, wa
 			var z := lerpf(-length * 0.47, length * 0.47, float(index) / 13.0)
 			ribs.append([midpoint + tilt * Vector3(0, ROOF_THICKNESS * 0.5 + 0.018, z),
 				Vector3(panel_width - 0.09, 0.045, 0.038), rib_color.lightened((index % 3) * 0.12), tilt])
+		# The original one-piece roof used in older worlds still carries its bolted replacement sheet.
+		var repair := midpoint + tilt * Vector3(side * panel_width * 0.23,ROOF_THICKNESS * 0.5 + 0.045,side * length * 0.27)
+		ribs.append([repair,Vector3(panel_width * 0.37,0.029,length * 0.13),Color("#858475"),tilt])
+		for corner: int in [-1,1]:
+			ribs.append([repair + tilt * Vector3(corner * panel_width * 0.15,0.024,length * 0.05),Vector3(0.065,0.021,0.065),Color("#735748"),tilt])
 		_cluster(chunk,"roof/"+str(side),ribs,220)
 	var cap := _feature(chunk, center + Vector3.UP * (ridge_height + half_plate_height - 0.045),
 		Vector3(0.30, 0.18, length + 0.08), Basis.IDENTITY, roof_color.lightened(0.18))
@@ -487,9 +519,19 @@ static func _landmark_details(parts: Array, site: String, center: Vector3, span:
 		"fuel":
 			var width:=8.42-0.77*weathered
 			var fascia := center + Vector3((8.42-width)*0.5, 3.34, 10.67)
-			parts.append([fascia, Vector3(width, 0.42, 0.12), Color("#994a40")])
+			# The original enamel band hangs on at the left; the right end has lost its skin.
+			var seam := fascia + Vector3.RIGHT * width * 0.26
+			parts.append([fascia + Vector3.LEFT * width * 0.12, Vector3(width * 0.76, 0.43, 0.13), Color("#914d41")])
+			parts.append([fascia + Vector3(-width * 0.12,-0.145,0.071),Vector3(width * 0.76,0.055,0.023),Color("#c4b38b")])
+			var bend := Basis(Vector3.BACK,-0.19)
+			parts.append([seam + bend * Vector3(width * 0.069,-0.05,0.015),Vector3(width * 0.138,0.31,0.10),Color("#99654d"),bend])
+			for y: float in [-0.10,0.16]:
+				parts.append([seam + Vector3(width * 0.12,y,-0.015),Vector3(width * 0.24,0.054,0.12),steel])
+			for bay in 3:
+				var truss := Basis(Vector3.BACK,(-1 if bay % 2 == 0 else 1) * atan2(0.26,width * 0.08))
+				parts.append([seam + Vector3(width * (0.04 + 0.08 * bay),0.03,0.03),Vector3(Vector2(0.26,width * 0.08).length(),0.043,0.059),Color("#775941"),truss])
 			for i in range(3):
-				parts.append([fascia + Vector3(-width*0.42 + i * 0.44, 0, 0.08), Vector3(0.18, 0.38, 0.04), ivory, Basis(Vector3.BACK, -0.42)])
+				parts.append([fascia + Vector3(-width*0.42 + i * 0.44, 0, 0.092), Vector3(0.18, 0.38, 0.04), ivory, Basis(Vector3.BACK, -0.42)])
 			for side in [-1, 1]:
 				var pump := center + Vector3(side * 2.0, 1.29, 8.83)
 				parts.append([pump, Vector3(0.45, 0.31, 0.07), steel])
@@ -609,12 +651,35 @@ static func _feature(chunk: WastelandChunk, at: Vector3, size: Vector3, basis: B
 static func _fixture_key(at:Vector3)->String:
 	return "fixture/%.3f/%.3f/%.3f"%[at.x,at.y,at.z]
 
+static func _pump_jacket(body: StaticBody3D, side: int) -> void:
+	var enamel := Color("#bbad8a")
+	var primer := Color("#80563f")
+	var steel := Color("#586361")
+	var parts := [
+		[Vector3(0,0.81,0),Vector3(0.68,0.11,0.65),enamel,Basis.IDENTITY,0.91],
+		[Vector3(0,-0.75,0),Vector3(0.65,0.17,0.63),primer],
+		[Vector3(0,-0.18,0.311),Vector3(0.47,0.65,0.028),steel if side<0 else Color("#8e6152")],
+		[Vector3(side*0.16,-0.05,0.337),Vector3(0.065,0.042,0.027),enamel],
+	]
+	for vent in 3:
+		parts.append([Vector3(0,-0.39+vent*0.055,0.332),Vector3(0.26,0.023,0.018),Color("#403d37")])
+	# The rubber line hangs from the head to the nozzle clipped to the casing.
+	var line := PackedVector3Array([Vector3(0.303,0.49,-0.13),Vector3(0.44,0.39,-0.13),
+		Vector3(0.51,-0.37,-0.10),Vector3(0.48,-0.57,0.02),Vector3(0.40,-0.53,0.14),Vector3(0.37,0.03,0.17)])
+	for i in range(line.size()-1):
+		var a := line[i] * Vector3(side,1,1)
+		var b := line[i+1] * Vector3(side,1,1)
+		var segment := b-a
+		parts.append([(a+b)*0.5,Vector3(0.048,segment.length()+0.018,0.05),Color("#393934"),Basis(Quaternion(Vector3.UP,segment.normalized()))])
+	parts.append([Vector3(side*0.35,0.13,0.17),Vector3(0.09,0.23,0.085),steel,Basis(Vector3.BACK,-side*0.17)])
+	Facades.clad_box(body,parts)
+
 static func _panel(chunk: WastelandChunk, at: Vector3, size: Vector3, basis: Basis, color: Color, id: String, hp: int, _diffs: Dictionary) -> void:
 	_feature(chunk,at,size,basis,color,id,hp)
 
 static func _loot(chunk: WastelandChunk, index: int, table: String, at: Vector3, quest: bool = false) -> void:
 	var profile := preload("res://game/art/supply_chest.gd").kind_at(chunk.stream.generator,chunk.position+at)
-	preload("res://game/world/regional_caches.gd").spawn(chunk,"container/"+str(index),table,at,{"quest":quest},profile)
+	preload("res://game/world/regional_caches.gd").spawn(chunk,"container/"+str(index),table,at,{"quest":quest,"building_cache":true},profile)
 
 static func _car(chunk: WastelandChunk, at: Vector3) -> void:
 	var chassis:=_feature(chunk, at, Vector3(2.3, 0.61, 3.83), Basis.IDENTITY, Color("#6a5f6c"))
@@ -638,18 +703,32 @@ static func _notice_board(chunk: WastelandChunk, at: Vector3) -> void:
 	var timber := Color("#74523b")
 	for side: int in [-1, 1]:
 		WastelandLook.box(board, Vector3(0.10,1.90,0.13), Vector3(side*0.61,-0.13,0), timber)
-	WastelandLook.box(board, Vector3(1.38,0.94,0.12),Vector3(0,0.33,0),Color("#435d53"))
+	var panel := WastelandLook.box(board,Vector3(1.38,0.94,0.12),Vector3(0,0.33,0),Color("#435d53"))
+	Signs.enamel(panel,Color("#435d53"),chunk.ruin.condition,chunk.stream.generator.seed_at(chunk.cell,389))
 	WastelandLook.box(board, Vector3(1.54,0.09,0.42),Vector3(0,0.86,0),timber.lightened(0.16))
 	WastelandLook.box(board, Vector3(1.05,0.47,0.36),Vector3(0,-0.46,0),Color("#48726e"))
 	WastelandLook.box(board, Vector3(0.27,0.04,0.08),Vector3(0,-0.41,0.20),Color("#d7ab6c"))
-	for i in 3:
+	var shore := chunk.cell==SHORE_CELL
+	var notices := [
+		"MISSING\nDockhand\nBlue coat" if shore else "MISSING\nTrail crew\nNorth pass",
+		"RATIONS\nOne tin\nper family",
+		"LAST FERRY\nSouth pier\n17:30" if shore else "WANTED\nSeed grain\nfor trade"
+	]
+	for i in notices.size():
 		var x := -0.39 + 0.37 * i
 		var paper := WastelandLook.box(board, Vector3(0.29,0.39,0.017),Vector3(x,0.29+i%2*0.06,0.078),Color("#e0c69a").darkened(i*0.06))
 		paper.rotation.z = (i-1)*0.085
-		for line in 3:
-			WastelandLook.box(board,Vector3(0.16-line*0.025,0.016,0.01),paper.position + Vector3(0,0.065-line*0.052,0.019),timber)
-	var heading := "湖务公告" if chunk.cell==SHORE_CELL else "驿站公告"
-	preload("res://game/world/painted_sign.gd").letter(board,heading,Vector3(0,0.655,0.103),Vector2(1.18,0.20))
+		var tack := paper.position+Vector3(0,0.166,0.012).rotated(Vector3.BACK,paper.rotation.z)
+		WastelandLook.box(board,Vector3(0.019,0.018,0.008),tack,Color("#655746"))
+		var ink := Signs.letter(board,notices[i],paper.position+Vector3(0,0,0.014),Vector2(0.25,0.25))
+		ink.name = "PaperNotice%d" % i
+		ink.rotation.z = paper.rotation.z
+		ink.modulate = timber.darkened(0.38)
+		ink.outline_size = 0
+		ink.visibility_range_end = 8
+	var heading := "HARBOR NOTICES" if shore else "STATION NOTICES"
+	var title := Signs.letter(board,heading,Vector3(0,0.655,0.103),Vector2(1.06,0.18))
+	title.shaded = true
 
 static func landing_shore(generator: WastelandTerrainGen) -> float:
 	var shore := 12.0
@@ -660,6 +739,7 @@ static func landing_shore(generator: WastelandTerrainGen) -> float:
 	return shore
 
 static func landing(chunk: WastelandChunk) -> void:
+	var first_member := chunk.poi_root.get_child_count()
 	var modern:bool=chunk.stream.generator.site_revision>0
 	var shore := landing_shore(chunk.stream.generator)
 	var near := Vector3(5.0, maxf(0.43, chunk.stream.generator.ground(5.0, shore + 1.0) + 0.12), shore + 1.0)
@@ -728,3 +808,4 @@ static func landing(chunk: WastelandChunk) -> void:
 		var lamp_id:="fixture/%.3f/%.3f/%.3f"%[lamp.position.x,lamp.position.y,lamp.position.z]
 		chunk.support_graph[post_id]=[["dock/platform"]]
 		chunk.support_graph[lamp_id]=[[post_id]]
+	preload("res://game/art/site_weathering.gd").dress_dock(chunk,first_member)

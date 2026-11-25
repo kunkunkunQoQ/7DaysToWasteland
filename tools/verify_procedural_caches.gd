@@ -89,7 +89,7 @@ func run()->void:
 		s._use()
 		# Ordinary boxes take a short held search before opening.
 		if s.loot_target==first: s._tick_loot(s.loot_full+0.01)
-		check(s.chest_key()==key and not s.chest_view(key).items.is_empty(),"generated ordinary loot opens with regional and building supplies")
+		check(s.chest_key()==key and not s.chest_view(key).items.is_empty(),"the precinct's specialty chest opens from its approach")
 		s.bag.add("stick",2)
 		s.ui_command("chest_put",[key,"stick",2])
 		var cargo:Dictionary=s.chest_view(key).items.duplicate()
@@ -116,13 +116,84 @@ func run()->void:
 		check(s.bag.count("stick")==1 and int(s.chest_view(key).items.stick)==int(cargo.stick)-1,"reloaded stock retains player deposit and withdraws exactly one")
 		s.ui_command("chest_close",[key])
 	check(quantities.size()>1 and floors.size()>1 and signatures.size()==6 and profiles.size()>1 and underwater.size()>1,"multiple seeds vary counts, floors, regional forms and salvage positions")
+	cfg.seed=27491
+	cfg.loot=0.5
+	app._enter_world(cfg,{},1,false)
+	app.session.simulation_paused=true
+	check_building_stock(app.session)
 	cfg.site_revision=0
 	app._enter_world(cfg,{},1,false)
 	var c:=precinct(app.session)
 	var old_body:StaticBody3D=c.supply_caches[c.object_key("container/0")].get_parent()
 	check(is_equal_approx(old_body.position.x,12.6) and is_equal_approx(old_body.position.z,13.36) and old_body.rotation.y==0 and old_body.get_meta("finish_variant")==0 and c.supply_caches.has(c.object_key("container/99")),"legacy boxes retain exact positions, IDs and unmodified appearance")
+	check_building_stock(app.session)
 	await app.session.stream.quiesce()
 	await app.session.audio.finish_playback()
 	app.free()
 	print("PROCEDURAL CHESTS failures=",fails," counts=",quantities.keys()," floors=",floors.keys()," profiles=",profiles.keys())
 	quit(1 if fails else 0)
+
+func check_building_stock(s: WastelandSession) -> void:
+	var gen := s.stream.generator
+	var cells := WastelandTerrainGen.FIXED.duplicate()
+	var found := {}
+	for site: String in cells.values(): found[site] = true
+	for z in range(-20,21):
+		for x in range(-20,21):
+			var pos := Vector2i(x,z)
+			var site := gen.site_for(pos)
+			if site != "" and not found.has(site):
+				cells[pos] = site
+				found[site] = true
+		if found.size() == s.catalog.sites.size(): break
+	var stations: Dictionary = s.catalog.sites.lodge.outpost_loots
+	for district: String in stations:
+		if district == "outpost": continue
+		cells[gen.starting_outpost(district)] = district
+	for pos: Vector2i in gen.nearby_outposts(Vector2.ZERO):
+		if not cells.has(pos):
+			cells[pos] = "outpost"
+			break
+	check(found.size() == s.catalog.sites.size() and cells.values().has("outpost"),
+		"generated sample includes all ten buildings and three inland stations")
+	for pos: Vector2i in cells:
+		var place: String = cells[pos]
+		var definition: Dictionary = s.catalog.sites.lodge if stations.has(place) else s.catalog.sites[place]
+		var ordinary: Array = stations.get(place,definition.loots)
+		var at := Vector2(pos * WastelandTerrainGen.SIZE) + Vector2(16,16)
+		s.stream.ensure_landing(Vector3(at.x,0,at.y))
+		var chunk: WastelandChunk = s.stream.active[pos]
+		var checked := 0
+		var valid := true
+		var has_archive := false
+		for key: String in chunk.supply_caches:
+			var slot := key.get_slice(":",1)
+			if not slot.begins_with("container/") and slot != "nest/deep": continue
+			var body: StaticBody3D = chunk.supply_caches[key].get_parent()
+			var table: String = body.get_meta("type")
+			var quest := slot == "container/99"
+			valid = valid and bool(body.get_meta("quest",false)) == quest
+			if quest:
+				has_archive = true
+				valid = valid and table == definition.get("archive_loot","")
+			elif slot == "nest/deep": valid = valid and table == definition.get("deep_loot","")
+			elif slot == "container/0": valid = valid and table == ordinary[0]
+			else: valid = valid and table in ordinary
+			s.player.global_position = body.global_position + Vector3.BACK
+			s._open_loot(body)
+			var view := s.chest_view(key)
+			var contents: Dictionary = view.get("items",{})
+			var stage := 2 + (int(definition.tier) - 1) * 6 if gen.site_revision > 0 else s.hordes.stage()
+			var allowed := {}
+			for row: Array in s.catalog.loot[table].items:
+				if stage >= int(row[4]): allowed[row[0]] = true
+			if quest: allowed["beacon_log"] = true
+			var box_ok: bool = body.get_meta("building_cache",false) and not contents.is_empty() and allowed.has_all(contents.keys()) and contents.get("beacon_log",0) == int(quest)
+			box_ok = box_ok and s.catalog.loot[table].name in view.get("title","")
+			var staples: Array = s.catalog.loot[table].get("staples",[])
+			if not staples.is_empty(): box_ok = box_ok and staples.any(func(item): return contents.has(item))
+			if not box_ok: printerr("Bad chest ",key," ",table," ",contents)
+			valid = valid and box_ok
+			checked += 1
+			s.chest_close(key)
+		check(checked > 0 and valid and has_archive == definition.has("archive_loot"), "%s rev %d opens %d containers with site stock, valid stage and correct quest log" % [place,gen.site_revision,checked])

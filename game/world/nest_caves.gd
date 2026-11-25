@@ -67,6 +67,7 @@ static func build(chunk: WastelandChunk) -> void:
 	body.collision_layer=2
 	body.collision_mask=0
 	body.set_meta("kind","terrain")
+	body.set_meta("rock_surface", true)
 	chunk.poi_root.add_child(body)
 	var model := MeshInstance3D.new()
 	model.mesh = rock.commit()

@@ -16,6 +16,7 @@ const FORMATIONS := [
 var session: Node3D
 var pool: Array[WastelandCreature] = []
 var alive: Array[WastelandCreature] = []
+var corpses: Array[WastelandCreature] = []
 var rng := RandomNumberGenerator.new()
 const RARE_ODDS := 50000
 const COMMON_LOOT := ["cloth","scrap","powder","round","bandage"]
@@ -121,6 +122,10 @@ func snapshot() -> Dictionary:
 	for actor in alive:
 		if actor.active:
 			actors.append(actor.serialize())
+	for actor in corpses:
+		var row := actor.serialize()
+		row.corpse_until = session.clock.elapsed + actor.brain.state_left
+		actors.append(row)
 	return {"heat":heat, "actors":actors, "spawn_serial":spawn_serial, "next_looks":next_looks.duplicate(), "event":event_day, "wave":wave_index, "next":next_wave,
 		"cleared":survived_recorded, "died":event_deaths, "rng":rng.state,"trophy_rng":trophy_rng.state,
 		"approach_angle":approach_angle, "approach_announced":approach_announced, "kills":event_kills,
@@ -187,11 +192,16 @@ func spend_path_query() -> bool:
 	path_budget -= 1
 	return true
 
+func tick_corpses(delta: float) -> void:
+	for actor in corpses.duplicate():
+		actor.think(delta,session.player)
+
 func simulate(delta: float) -> void:
 	var player: WastelandSurvivor = session.player
 	var teammates:Array[WastelandSurvivor]=session.living_players()
 	teammates.erase(player)
 	path_budget = PATHS_PER_TICK
+	tick_corpses(delta)
 	for actor in alive.duplicate():
 		actor.think(delta,player,teammates)
 	next_sim -= delta
@@ -202,6 +212,11 @@ func simulate(delta: float) -> void:
 		sounds.pop_front()
 	for i in range(fresh.size() - 1, -1, -1):
 		var row: Dictionary = fresh[i]
+		if row.has("corpse_until"):
+			row.state_left = float(row.corpse_until) - session.clock.elapsed
+			if row.state_left <= 0.0:
+				fresh.remove_at(i)
+				continue
 		if session.stream.at_surface(row.at) and (str(row.get("nest","")).is_empty() or session.team_distance_squared(row.at)<65.0*65.0):
 			if _spawn(row.id, row.at, row.wave, row):
 				fresh.remove_at(i)
@@ -252,7 +267,7 @@ func simulate(delta: float) -> void:
 				actor.wave = false
 				actor.brain.retreat_from(player.global_position)
 		# Deferred actors are outside the streamed world and can disperse immediately.
-		fresh = fresh.filter(func(row): return not row.get("wave",false))
+		fresh = fresh.filter(func(row): return not row.get("wave",false) or row.get("fsm",-1) == WastelandCreatureBrain.State.DEAD)
 		assault_budget = 0.0
 		survived_recorded = event_day
 		if event_deaths == 0:
@@ -499,10 +514,10 @@ func hunt_target(predator: WastelandCreature, prey: Array) -> WastelandCreature:
 	var reach := 22.0 * 22.0
 	for other in alive:
 		if other.type in prey:
-			var gap := predator.global_position.distance_squared_to(other.global_position)
+			var gap := predator.global_position.distance_squared_to(other.physical_position())
 			if gap < reach:
 				var from := predator.global_position + Vector3.UP * float(predator.spec.height) * 0.6
-				var to := other.global_position + Vector3.UP * float(other.spec.height) * 0.6
+				var to := other.physical_position() if other.ragdoll != null else other.global_position + Vector3.UP * float(other.spec.height) * 0.6
 				if predator.brain.route.ray(from, to).is_empty():
 					reach = gap
 					nearest = other
@@ -616,19 +631,10 @@ func _spawn(id: String, at: Vector3, is_wave: bool, previous: Dictionary = {}) -
 	if not session.catalog.enemies.has(id):
 		return false
 	var animal := id in WILDLIFE
-	if (animal and wildlife_count >= WILDLIFE_CAP) or (not animal and alive.size() - wildlife_count >= CAP):
+	var dead := int(previous.get("fsm",-1)) == WastelandCreatureBrain.State.DEAD
+	if not dead and ((animal and wildlife_count >= WILDLIFE_CAP) or (not animal and alive.size() - wildlife_count >= CAP)):
 		return false
-	var choice: WastelandCreature
-	for actor in pool:
-		if actor.active:
-			continue
-		if choice == null:
-			choice = actor
-		if actor.type == id:
-			choice = actor
-			break
-	if choice == null:
-		return false
+	var choice := acquire_actor(id)
 	var serial := int(previous.get("serial",0))
 	if serial <= 0 or actors_by_serial.has(serial):
 		spawn_serial += 1
@@ -652,11 +658,42 @@ func _spawn(id: String, at: Vector3, is_wave: bool, previous: Dictionary = {}) -
 		var group := id + "/" + str(previous.get("morph", ""))
 		previous.look_index = _next_look(group, look_count)
 	choice.revive(id, at, is_wave, previous)
-	alive.append(choice)
 	actors_by_serial[serial] = choice
-	if animal:
-		wildlife_count += 1
+	if dead:
+		corpses.append(choice)
+	else:
+		alive.append(choice)
+		if animal:
+			wildlife_count += 1
 	return true
+
+func acquire_actor(id: String) -> WastelandCreature:
+	var available: WastelandCreature
+	for actor in pool:
+		if actor.active:
+			continue
+		if actor.type == id:
+			return actor
+		if available == null:
+			available = actor
+	if available != null:
+		return available
+	# A fallen actor keeps its own meshes and skeleton until the corpse expires.
+	# Temporary slots let the living population refill during that window.
+	available = WastelandCreature.new()
+	available.set_meta("temporary_pool_slot",true)
+	add_child(available)
+	available.configure(self)
+	pool.append(available)
+	return available
+
+func retain_corpse(actor: WastelandCreature) -> void:
+	if not alive.has(actor):
+		return
+	alive.erase(actor)
+	if actor.type in WILDLIFE:
+		wildlife_count -= 1
+	corpses.append(actor)
 
 @warning_ignore("integer_division")
 func _next_look(group: String, count: int) -> int:
@@ -684,19 +721,25 @@ func _next_look(group: String, count: int) -> int:
 
 func release(actor: WastelandCreature) -> void:
 	if actor.active:
-		if actor.type in WILDLIFE:
-			wildlife_count -= 1
+		if alive.has(actor):
+			alive.erase(actor)
+			if actor.type in WILDLIFE:
+				wildlife_count -= 1
+		else:
+			corpses.erase(actor)
 		actor.deactivate()
 		actors_by_serial.erase(actor.spawn_serial)
-		alive.erase(actor)
+		if actor.get_meta("temporary_pool_slot",false):
+			pool.erase(actor)
+			actor.queue_free()
 
-func defeated(actor: WastelandCreature) -> void:
+func defeated(actor: WastelandCreature, hit_at := Vector3.INF, hit_bone: StringName = &"") -> void:
 	if session.replica or not actor.active or not alive.has(actor): return
 	if actor.brain.state == WastelandCreatureBrain.State.DEAD: return
 	var animal := actor.type in WILDLIFE
 	if actor.wave and session.clock.horde_active():
 		event_kills += 1
-	var p := actor.global_position
+	var p := actor.physical_position()
 	if animal:
 		var harvest := {}
 		for material in actor.spec.ecology.harvest:
@@ -724,8 +767,8 @@ func defeated(actor: WastelandCreature) -> void:
 		var morph_record := record + "_" + actor.morph
 		session.progress.records[morph_record] = int(session.progress.records.get(morph_record, 0)) + 1
 	session.audio.play_at("growl" if not animal else "hit", p + Vector3.UP * 0.47, 0.42)
-	if animal: release(actor)
-	else: actor.begin_death()
+	actor.begin_death(Vector3.ZERO,hit_at,hit_bone)
+	retain_corpse(actor)
 
 func can_mend(caller: WastelandCreature, other: WastelandCreature, radius: float) -> bool:
 	if other == caller or not other.active or other.hp <= 0.0 or other.brain.animal or other.hp >= other.max_health():
@@ -746,7 +789,7 @@ func wounded_ally(caller: WastelandCreature, radius: float) -> WastelandCreature
 	return patient
 
 func rupture(actor: WastelandCreature) -> void:
-	if session.replica or not actor.active: return
+	if session.replica or not alive.has(actor): return
 	var origin := actor.gland.global_position
 	infected_effect("rupture",origin)
 	session.audio.play_at("boom",origin,1.12)
@@ -779,7 +822,7 @@ func nearest_enemy(at: Vector3, radius: float) -> WastelandCreature:
 	for actor in alive:
 		if not actor.active or actor.hp <= 0.0 or actor.type in WILDLIFE:
 			continue
-		var d := actor.global_position.distance_squared_to(at)
+		var d := actor.physical_position().distance_squared_to(at)
 		if d < best:
 			best = d
 			result = actor

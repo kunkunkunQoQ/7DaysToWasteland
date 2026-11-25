@@ -68,9 +68,11 @@ func exercise_actors(round_id: int) -> void:
 		var paid_score:=director.event_kills
 		director.defeated(actor)
 		idempotent=idempotent and paid_serial==s.fx.serial and paid_score==director.event_kills
-	check(fresh and idempotent and director.wildlife_count==0 and director.alive.size()==director.CAP,"fresh actor state, one death payout, wildlife released while infected corpses remain")
-	for actor in director.alive.duplicate(): actor.think(3.1,s.player)
-	check(director.alive.is_empty() and director.actors_by_serial.is_empty() and director.pool.all(func(a):return not a.active and not a.visible and a.collision_layer==0 and a.brain.seen==null),"corpse hold expires and every active actor index is emptied")
+	check(fresh and idempotent and director.wildlife_count==0 and director.alive.is_empty() and director.corpses.size()==director.CAP+director.WILDLIFE_CAP,"both populations leave a corpse and release their living slot after one payout")
+	check(director._spawn("walker",base,true,previous) and director._spawn("hare",base,false,previous),"a full field of corpses still allows new enemies and wildlife")
+	for actor in director.alive.duplicate(): director.release(actor)
+	for actor in director.corpses.duplicate(): actor.think(WastelandCreature.CORPSE_SECONDS+0.1,s.player)
+	check(director.alive.is_empty() and director.corpses.is_empty() and director.actors_by_serial.is_empty() and director.pool.all(func(a):return not a.active and not a.visible and a.collision_layer==0 and a.brain.seen==null),"corpse hold expires and every active actor index is emptied")
 	director._spawn("bulwark",base,false,previous)
 	var replacement: WastelandCreature=director.alive.front()
 	s.fx.simulate_projectiles(0.05)

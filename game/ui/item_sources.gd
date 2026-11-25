@@ -125,12 +125,23 @@ func _caches(catalog: WastelandCatalog) -> void:
 	for table: String in catalog.loot:
 		var places := PackedStringArray()
 		if CACHE_AREAS.has(table): places.append(CACHE_AREAS[table])
-		if table in Nest.CHEST_TABLES: places.append("感染者巢穴")
+		if table in Nest.CHEST_TABLES or table == "ridge_cache": places.append("感染者巢穴")
 		for site: Dictionary in catalog.sites.values():
-			if table in site.loots: places.append(site.name)
+			if table == site.get("archive_loot",""):
+				places.append(site.name + ("（含任务柜）" if table in site.loots else "任务柜"))
+			elif table == site.get("deep_loot",""):
+				places.append(site.name + ("（含深处储备）" if table in site.loots else "深处"))
+			elif table in site.loots:
+				places.append(site.name)
+			var outposts: Dictionary = site.get("outpost_loots",{})
+			for station: String in outposts:
+				if table in outposts[station]:
+					places.append(WastelandSite.STARTS.get(station,"荒原前哨"))
+		if places.is_empty(): continue
 		var chest: Dictionary = catalog.loot[table]
 		for row: Array in chest.items:
 			var words := "%s · 每次抽中 ×%d–%d" % [chest.name,row[2],row[3]]
 			if int(row[4])>0: words += " · 箱内物资阶段 ≥%d" % row[4]
-			if not places.is_empty(): words += " · " + "、".join(places)
+			if row[0] in chest.get("staples",[]): words += " · 建筑箱常备物资之一"
+			words += " · " + "、".join(places)
 			random[row[0]].append(words)

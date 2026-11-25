@@ -14,6 +14,8 @@ const FINISH := {
 const DIMENSIONS := {"alpine":Vector3(1.37,0.60,0.80),"desert":Vector3(0.94,1.26,0.94),"shore":Vector3(1.18,0.68,0.72),"forest":Vector3(1.06,0.78,0.74),
 	"ridge":Vector3(1.15,0.59,0.74),"ash":Vector3(0.80,0.90,0.80),"town":Vector3(0.84,0.93,0.65),
 	"ferry":Vector3(1.15,0.64,0.74),"pump":Vector3(0.80,0.88,0.80),"bridge":Vector3(0.90,0.77,0.74)}
+const BADGES := {"medical":"d39b84","kitchen":"a7ab73","weapons":"8b9a7d","safe":"c5aa69","salvage":"81ada9",
+	"trunk":"a29bae","fuel":"b77b4d","seed":"80a579","radio":"849eaf","parcel":"bd9e74"}
 static var mesh_cache: Dictionary = {}
 static var finishes: Dictionary = {}
 var lid := MeshInstance3D.new()
@@ -34,12 +36,16 @@ static func kind_at(gen: WastelandTerrainGen, p: Vector3) -> String:
 	if region in ["alpine","desert"]: return region
 	return BIOME_KEYS[gen.biome(p.x,p.z)]
 
-func configure(id: String, table: String, variant:=0) -> void:
+static func casing_material(id: String) -> String:
+	return "wood" if id in ["forest", "alpine", "shore", "ferry"] else "scrap"
+
+func configure(id: String, marking: String, variant:=0) -> void:
 	name = "SupplyChest"
 	profile = id
-	var key := id+"/"+table
+	var badge := marking if BADGES.has(marking) else ""
+	var key := id+"/"+badge
 	if not mesh_cache.has(key):
-		mesh_cache[key] = _build(id,table)
+		mesh_cache[key] = _build(id,badge)
 	var pieces: Array = mesh_cache[key]
 	scale = DIMENSIONS[id]
 	var hull := MeshInstance3D.new()
@@ -123,7 +129,7 @@ class Section extends WastelandScenery:
 		for i in range(1,points.size()-1):
 			triangle(points[0],points[i],points[i+1],Vector3.UP if up else Vector3.DOWN,tint)
 
-static func _build(id: String,table: String) -> Array:
+static func _build(id: String,badge: String) -> Array:
 	var base := Section.new(427)
 	var top := Section.new(543)
 	var cargo := Section.new(315)
@@ -238,22 +244,58 @@ static func _build(id: String,table: String) -> Array:
 			base.tube(PackedVector3Array([spout,spout+Vector3(side*0.17,0,0),spout+Vector3(side*0.22,0.06,0),spout+Vector3(side*0.22,0.16,0)]),PackedFloat32Array([0.081,0.079,0.073,0.076]),10,accent)
 			base.bar(spout+Vector3(side*0.22,0.163,0),Vector3(0.18,0.041,0.18),frame)
 	# Small pictographs keep the location's medical, food and technical contents identifiable.
-	var badge_colors := {"medical":"d39b84","kitchen":"a7ab73","weapons":"8b9a7d","safe":"c5aa69","salvage":"81ada9","trunk":"a29bae"}
-	if badge_colors.has(table):
+	if not badge.is_empty():
 		var at := Vector3(0.22,-0.16,0.067) if door else Vector3(0.03,0.07,0.455)
 		var board := top if door else base
-		board.bar(at,Vector3(0.181,0.146,0.021),Color.html(badge_colors[table]))
-		if table == "medical":
-			board.bar(at+Vector3.BACK*0.019,Vector3(0.106,0.032,0.014),Color.WHITE)
-			board.bar(at+Vector3.BACK*0.020,Vector3(0.030,0.104,0.014),Color.WHITE)
-		else:
-			for line in 2: board.bar(at+Vector3(0,0.025-line*0.047,0.014),Vector3(0.115-line*0.034,0.012,0.011),frame)
-	if id=="desert":
+		board.bar(at,Vector3(0.181,0.146,0.021),Color.html(BADGES[badge]))
+		var ink := at + Vector3.BACK * 0.019
+		match badge:
+			"medical":
+				board.bar(ink,Vector3(0.106,0.032,0.014),Color.WHITE)
+				board.bar(ink+Vector3.BACK*0.001,Vector3(0.030,0.104,0.014),Color.WHITE)
+			"seed","parcel":
+				# A sprout on crop stores; a folded envelope flap on parcels.
+				for side in [-1,1]:
+					board.bar(ink+Vector3(side*0.032,0.016,0),Vector3(0.077,0.018,0.012),frame,Basis(Vector3.BACK,side*0.54))
+				if badge=="seed": board.bar(ink+Vector3.DOWN*0.018,Vector3(0.017,0.069,0.012),frame)
+				else: board.bar(ink+Vector3.DOWN*0.032,Vector3(0.137,0.016,0.012),frame)
+			"radio":
+				board.bar(ink,Vector3(0.015,0.103,0.012),frame)
+				for row in 2:
+					board.bar(ink+Vector3.UP*(0.038-row*0.03),Vector3(0.126-0.035*row,0.014,0.012),frame)
+			"fuel":
+				board.bar(ink+Vector3.DOWN*0.009,Vector3(0.088,0.075,0.012),frame)
+				board.bar(ink+Vector3(-0.023,0.036,0),Vector3(0.031,0.024,0.012),frame)
+			"salvage":
+				var head := ink + Vector3.UP*0.024
+				board.bar(ink+Vector3.DOWN*0.014,Vector3(0.019,0.082,0.012),frame)
+				for side in [-1,1]:
+					board.bar(head+Vector3(side*0.015,0.009,0),Vector3(0.018,0.043,0.012),frame,Basis(Vector3.BACK,-side*0.60))
+			_:
+				for line in 2: board.bar(at+Vector3(0,0.025-line*0.047,0.014),Vector3(0.115-line*0.034,0.012,0.011),frame)
+	if badge=="medical":
+		cargo.bar(Vector3(-0.10,-0.18,0),Vector3(0.26,0.19,0.22),Color("#ad816d"))
+		var roll := Vector3(0.14,-0.20,0)
+		cargo.tube([roll+Vector3.FORWARD*0.14,roll+Vector3.BACK*0.14],[0.089,0.089],9,Color("#d2c6af"))
+	elif badge in ["fuel","kitchen"]:
+		for i in 3:
+			var at := Vector3(-0.18+0.18*i,-0.29,0.065*(i%2))
+			if badge=="fuel":
+				cargo.bar(at+Vector3.UP*0.13,Vector3(0.14,0.26,0.18),Color("#98854e"))
+				cargo.bar(at+Vector3(-0.034,0.275,0),Vector3(0.051,0.033,0.06),frame)
+			else:
+				cargo.tube([at,at+Vector3.UP*0.20],[0.079,0.079],9,metal)
+	elif badge=="parcel":
+		for side in [-1,1]:
+			var at := Vector3(side*0.13,-0.18,side*0.035)
+			cargo.bar(at,Vector3(0.23,0.17,0.26),Color("#a07a57"))
+			cargo.bar(at,Vector3(0.042,0.177,0.265),Color("#ccba8b"))
+	elif id=="desert" and badge.is_empty():
 		var bottles:Color=Color("#9bc8c2")
 		for i in 3:
 			var at:=Vector3(-0.18+0.18*i,-0.21,0)
 			cargo.tube([at,at+Vector3.UP*0.19,at+Vector3.UP*0.25],[0.073,0.073,0.031],10,bottles,0)
-	elif id=="alpine":
+	elif id=="alpine" and badge.is_empty():
 		cargo.bar(Vector3(-0.13,-0.13,0),Vector3(0.25,0.33,0.26),accent)
 		cargo.tube([Vector3(0.09,-0.15,-0.17),Vector3(0.09,-0.15,0.17)],[0.107,0.107],11,Color("#698b7b"),0)
 	else:

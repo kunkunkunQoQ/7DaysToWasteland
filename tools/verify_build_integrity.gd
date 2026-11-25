@@ -63,8 +63,13 @@ func run() -> void:
 	s.bag.add("stone_axe", 1)
 	s.bag.assign("stone_axe", s.bag.active)
 	s.bag.add("wood", 160)
+	var intact: ShaderMaterial = con.nodes[base].get_child(0).material_override
 	con.damage(base, 35)
 	var info: Dictionary = con.blocks[base]
+	var chipped: ShaderMaterial = con.nodes[base].get_child(0).material_override
+	check(chipped.get_shader_parameter("wear_offset") == intact.get_shader_parameter("wear_offset")
+		and chipped.get_shader_parameter("patina") == preload("res://game/art/weather_noise.tres"),
+		"damage retains the block's weathered surface beneath its new cracks")
 	check(con.crack_stage(info) == 2, "below 35 percent shows two crack branches")
 	var wood := s.bag.count("wood")
 	await aim(base)
@@ -82,6 +87,7 @@ func run() -> void:
 	check(info.hp == 25 and s.bag.count("wood") == wood - 1, "switching tools cancels work without charging")
 	for i in 3: con.upgrade(base)
 	check(info.hp == 50 and con.crack_stage(info) == 0, "repairs stop at full health")
+	check(con.nodes[base].get_child(0).material_override == intact, "full repair restores the same salvaged board finish")
 	for tier in 4:
 		for key: String in con.UPGRADE[tier]:
 			s.bag.add(key, con.UPGRADE[tier][key])
