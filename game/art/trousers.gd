@@ -1,9 +1,10 @@
 extends RefCounted
 
 const Limb := preload("res://game/art/avatar_limb.gd")
+const GarmentMesh := preload("res://game/art/garment_mesh.gd")
 const CANVAS := Color("#72795a",0.50)
 const QUILT := Color("#4b6580",0.50)
-const SIDES := 28
+const SIDES := 16
 static var cache := {}
 
 static func dye(id:String)->Color:
@@ -41,13 +42,11 @@ static func leg(id:String,side:int,mass:float)->ArrayMesh:
 			surface.set_weights(PackedFloat32Array([1.0-weight,weight,0,0]))
 			surface.add_vertex(vertex)
 		count+=1
-	for i in count-1:
-		for j in SIDES:
-			var a:=i*SIDES+j
-			var b:=i*SIDES+(j+1)%SIDES
-			for index in [a,a+SIDES,b,b,a+SIDES,b+SIDES]: surface.add_index(index)
-	surface.generate_normals()
-	cache[key]=surface.commit()
+	var near := GarmentMesh.rings(SIDES, PackedInt32Array(range(count)), 1, true)
+	# Keep extra rings across the knee blend and the contrasting ankle cuff.
+	var middle := GarmentMesh.rings(SIDES, [0,1,3,5,7,9,11,13,14,15], 2, true)
+	var far := GarmentMesh.rings(SIDES, [0,2,5,7,9,11,14,15], 2, true)
+	cache[key]=GarmentMesh.finish(surface, near, middle, far)
 	return cache[key]
 
 static func packed_mesh(id:String)->ArrayMesh:

@@ -216,6 +216,7 @@ func place(cell: Vector3i, item: String, shape: int, rotation_step: int, player:
 		session.notify("支撑不足 · %d 个构件坍塌" % fallen)
 	else:
 		session.gain(7, "build")
+		session.record_shawl_action("搭起了" + session.catalog.title(item))
 	return fallen == 0
 
 func _max_hp(block: Dictionary) -> float:
@@ -319,6 +320,7 @@ func upgrade(cell: Vector3i) -> void:
 			session.notify("缺少建材 · " + session.catalog.requirements(REPAIR[tier]))
 			return
 		info.hp = minf(HP[tier], float(info.hp) + ceilf(HP[tier] * 0.2))
+		session.record_shawl_action("修补了受损构件")
 		_refresh_surface(cell)
 		session.audio.play_at("hammer", position_of(cell), 1.05)
 		return
@@ -328,6 +330,7 @@ func upgrade(cell: Vector3i) -> void:
 		info.tier = tier + 1
 		info.hp = HP[tier + 1]
 		session.gain(15, "build")
+		session.record_shawl_action("升级了营地构件")
 	else:
 		session.notify("缺少建材 · " + session.catalog.requirements(UPGRADE[tier]))
 		return

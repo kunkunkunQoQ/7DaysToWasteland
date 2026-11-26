@@ -5,9 +5,15 @@ const Sculpt := WastelandBestiary.Sculpture
 const HEAD := preload("res://game/art/ranger_head.gd")
 const LIMB := preload("res://game/art/avatar_limb.gd")
 const GEAR_ART := preload("res://game/art/survivor_equipment.gd")
+const GarmentMesh := preload("res://game/art/garment_mesh.gd")
 const ActiveMotion := preload("res://game/actors/active_ragdoll.gd")
 const SURFACE := preload("res://shaders/survivor_surface.gdshader")
+const GarmentMotion := preload("res://game/art/garment_motion.gd")
+var garment_motion: Array[GarmentMotion] = []
+var garment_elapsed := 0.0
+var garment_swimming := false
 static var body_material: ShaderMaterial
+static var garment_meshes := {}
 const OUTFITS := {"ranger":"巡护员","ferryman":"渡工","surveyor":"测绘员","mechanic":"机修工","medic":"急救员","climber":"攀岩者","bronx":"街头混混"}
 const NAMES := {"ranger":"白冻梨","ferryman":"江过早","surveyor":"莫问几楼","mechanic":"鲁把串","medic":"艾微辣","climber":"蔡爱拼","bronx":"杰伦·六码"}
 const ORIGINS := {"ranger":"哈尔滨","ferryman":"武汉","surveyor":"重庆","mechanic":"淄博","medic":"长沙","climber":"泉州","bronx":"纽约布朗克斯"}
@@ -88,7 +94,13 @@ var preview_mainhand:=""
 var preview_loaded:=false
 var primary_shield:MeshInstance3D
 var motion_world: Node3D
+const GetUp := preload("res://game/actors/survivor_getup.gd")
+var getup: GetUp
+var replica_ground_time := 0.0
+var replica_ground_at := Vector3.INF
+var replica_ground_normal := Vector3.UP
 var active_motion: ActiveMotion
+var seat_vehicle: PhysicsBody3D
 var first_person_body := false
 
 func configure_live_motion(world: Node3D, first_person := false) -> void:
@@ -100,12 +112,87 @@ func stop_live_motion() -> void:
 	if is_instance_valid(active_motion): active_motion.stop_driving()
 	active_motion = null
 
+func set_seat_vehicle(vehicle: PhysicsBody3D) -> void:
+	if seat_vehicle == vehicle: return
+	if is_instance_valid(active_motion):
+		for part in active_motion._parts:
+			if is_instance_valid(seat_vehicle): part.body.remove_collision_exception_with(seat_vehicle)
+			if vehicle: part.body.add_collision_exception_with(vehicle)
+	seat_vehicle = vehicle
+
 func push_part(impact: Vector3, at: Vector3, bone: StringName = &"") -> void:
 	if is_instance_valid(active_motion): active_motion.kick_at(impact, at, bone)
 
+func pose_replica(dt: float, motion: Vector3, duck: float, swimming: bool) -> void:
+	# Remote roots are interpolated. A short terrain probe also works on player-built floors.
+	replica_ground_time -= dt
+	if not swimming and (replica_ground_time <= 0.0 or not replica_ground_at.is_finite() or global_position.distance_squared_to(replica_ground_at) > 0.65):
+		replica_ground_time = 0.09
+		replica_ground_at = global_position
+		var query := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * 0.22, global_position + Vector3.DOWN * 0.38, 1 | 2 | 8)
+		var hit := get_world_3d().direct_space_state.intersect_ray(query)
+		replica_ground_normal = hit.normal if not hit.is_empty() and hit.normal.y >= 0.55 and global_position.y - hit.position.y < 0.22 else Vector3.ZERO
+	pose(dt, Vector2(motion.x,motion.z).length(), duck, swimming, motion, not swimming and replica_ground_normal.y > 0.0, replica_ground_normal)
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED and not is_visible_in_tree():
-		stop_live_motion()
+		_reset_garments()
+		if gait != null: gait.reset()
+
+func _reset_garments() -> void:
+	garment_elapsed = 0.0
+	for garment in garment_motion:
+		if garment.previous_pin.is_finite(): garment.reset()
+
+func inherit_garment_motion(source: WastelandPartyAvatar) -> void:
+	if not is_instance_valid(source) or outfit != source.outfit or equipped != source.equipped or accessories != source.accessories:
+		return
+	# Matching outfits bind in the same slot/side order, even for mirrored cuffs and legs.
+	if garment_motion.size() != source.garment_motion.size(): return
+	for i in garment_motion.size():
+		var garment := garment_motion[i]
+		var donor := source.garment_motion[i]
+		if garment.piece.name == donor.piece.name:
+			garment.inherit_motion(donor)
+
+func recover_from(source: WastelandPartyAvatar) -> void:
+	if not is_instance_valid(source) or source.outfit != outfit: return
+	getup = GetUp.new(self, source)
+	sync_joint_skins()
+	gait.reset()
+	inherit_garment_motion(source)
+
+func sync_joint_skins() -> void:
+	var waist := jacket.basis.orthonormalized()
+	var height := 0.85 * float(LEG_LENGTH[outfit]) + 0.125 * jacket.scale.y
+	shorts_rig.set_bone_pose_rotation(0, waist.get_rotation_quaternion())
+	shorts_rig.set_bone_pose_position(0, Vector3.UP * height - waist * (Vector3.UP * height))
+	for i in 2:
+		shorts_rig.set_bone_pose_rotation(i + 1, legs[i].quaternion)
+		arm_rigs[i].set_bone_pose_rotation(1, elbows[i].quaternion)
+		arm_rigs[i].set_bone_pose_rotation(2, wrist_joints[i].quaternion)
+		leg_rigs[i].set_bone_pose_rotation(1, knees[i].quaternion)
+		leg_rigs[i].set_bone_pose_rotation(2, ankle_joints[i].quaternion)
+
+func _physics_process(delta: float) -> void:
+	if garment_motion.is_empty() or not is_visible_in_tree(): return
+	garment_elapsed += delta
+	if garment_elapsed < 1.0 / 30.0: return
+	var elapsed := garment_elapsed
+	garment_elapsed = 0.0
+	var camera := get_viewport().get_camera_3d()
+	if camera != null:
+		var at := jacket.to_global(Vector3.UP * 1.2)
+		var reach := 28.0 * clampf(76.0 / camera.fov, 1.0, 2.2)
+		var distance := camera.global_position.distance_squared_to(at)
+		if distance > reach * reach or (distance > 9.0 and not camera.is_position_in_frustum(at)):
+			_reset_garments()
+			return
+	if elapsed > 0.15:
+		_reset_garments()
+		return
+	for garment in garment_motion:
+		garment.step(elapsed, garment_swimming)
 
 func _shadow_meshes(branch: Node) -> void:
 	if branch is GeometryInstance3D:
@@ -171,11 +258,15 @@ var arm_rigs: Array[Skeleton3D] = []
 var leg_rigs: Array[Skeleton3D] = []
 var shorts_rig: Skeleton3D
 var stride := 0.0
+var gait := preload("res://game/actors/survivor_gait.gd").new()
 var show_tag := true
 var player_name := WastelandSettings.DEFAULT_PLAYER_NAME
 var name_tag: Label3D
 
 func _ready() -> void:
+	# Both active and fallen ragdolls write their colliding joints at the default priority.
+	# Sample the resulting pose, and keep damping the cloth after the bodies go to sleep.
+	process_physics_priority = 10
 	add_child(pivot)
 	if show_tag:
 		name_tag = Label3D.new()
@@ -213,7 +304,9 @@ func _reset_children(parent: Node3D) -> void:
 		child.queue_free()
 
 func _build_body() -> void:
+	getup = null
 	stop_live_motion()
+	gait.reset()
 	if jacket.get_parent() != null:
 		_reset_children(pivot)
 		jacket = Node3D.new()
@@ -295,50 +388,60 @@ func _shirt_top(a: float) -> float:
 	return 1.355 + crest * 0.084 - front * front * depth - side * 0.095
 
 func _shirt(width: Vector3, hues: Array, skin: Color, outer := false) -> void:
-	var rings := _sections(width)
-	var hem := 1.115 if outfit=="surveyor" else 1.088 if outfit=="climber" else 1.061 if outfit=="medic" else 0.962
-	if outer: hem = 0.933
-	const AROUND := 44
-	const ROWS := 35
-	for cloth:bool in [false,true]:
+	for cloth: bool in [false,true]:
 		if outer and not cloth: continue
-		var surface:=SurfaceTool.new()
-		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-		for j in ROWS:
-			var f:=float(j)/(ROWS-1)
-			for i in AROUND:
-				var angle:=TAU*i/AROUND
-				var y:=lerpf(hem,_shirt_top(angle),f) if cloth else lerpf(0.892,1.55,f)
-				var ease:=0.006 if cloth else -0.016*(1.0-smoothstep(0.892,0.97,y))
-				if outer:
-					y += f*0.009
-					ease = 0.015+0.026*(1.0-smoothstep(0.945,1.03,y))
-				var point:=_section_point(rings,y,angle,ease)
-				var across:=_section_point(rings,y,angle+0.013,ease)-_section_point(rings,y,angle-0.013,ease)
-				var up:=_section_point(rings,y+0.0015,angle,ease)-_section_point(rings,y-0.0015,angle,ease)
-				up.y=0.003
-				var tint:=skin.darkened(smoothstep(1.385,1.54,y)*(0.14+0.12*maxf(cos(angle),0)))
-				if cloth: tint=hues[2] if j<2 or j>=ROWS-2 else hues[0]
-				if outer:
-					var seam := absf(wrapf(angle,-PI,PI))
-					if seam < 0.035: tint = hues[0].darkened(0.27)
-					if seam > 0.30 and seam < 0.85 and j in [7,8,9]: tint = hues[2]
-				surface.set_color(tint)
-				surface.set_normal(up.cross(across).normalized())
-				surface.add_vertex(point)
-		for j in ROWS-1:
-			for i in AROUND:
-				var a:=j*AROUND+i
-				var b:=j*AROUND+(i+1)%AROUND
-				for index:int in [a,b,a+AROUND,b,b+AROUND,a+AROUND]:
-					surface.add_index(index)
-		var mesh:=MeshInstance3D.new()
-		mesh.mesh=surface.commit()
-		mesh.material_override=body_material
+		var component := "OilskinVest" if outer else "Undershirt" if cloth else "SkinTorso"
+		var key := outfit + "/" + component
+		if not garment_meshes.has(key):
+			garment_meshes[key] = _shirt_mesh(width, hues, skin, cloth, outer)
+		var mesh := MeshInstance3D.new()
+		mesh.name = component
+		mesh.mesh = garment_meshes[key]
+		mesh.material_override = body_material
 		if outer: equipment.add_child(mesh)
 		else:
 			jacket.add_child(mesh)
 			if cloth: undershirt = mesh
+
+func _shirt_mesh(width: Vector3, hues: Array, skin: Color, cloth: bool, outer: bool) -> ArrayMesh:
+	var sections := _sections(width)
+	var hem := 1.115 if outfit=="surveyor" else 1.088 if outfit=="climber" else 1.061 if outfit=="medic" else 0.962
+	if outer: hem = 0.933
+	const FABRIC_ROWS := [0,1,2,4,6,7,9,10,13,16,19,22,25,28,30,32,33,34]
+	var rows := PackedInt32Array(FABRIC_ROWS if cloth else range(35))
+	var sides := 32 if cloth else 44
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for j in rows:
+		var f := float(j)/34.0
+		for i in sides:
+			var angle := TAU*i/sides
+			var y := lerpf(hem,_shirt_top(angle),f) if cloth else lerpf(0.892,1.55,f)
+			var ease := 0.006 if cloth else -0.016*(1.0-smoothstep(0.892,0.97,y))
+			if outer:
+				y += f*0.009
+				ease = 0.015+0.026*(1.0-smoothstep(0.945,1.03,y))
+			var point := _section_point(sections,y,angle,ease)
+			var across := _section_point(sections,y,angle+0.013,ease)-_section_point(sections,y,angle-0.013,ease)
+			var up := _section_point(sections,y+0.0015,angle,ease)-_section_point(sections,y-0.0015,angle,ease)
+			up.y = 0.003
+			var tint := skin.darkened(smoothstep(1.385,1.54,y)*(0.14+0.12*maxf(cos(angle),0)))
+			if cloth: tint = hues[2] if j<2 or j>=33 else hues[0]
+			if outer:
+				var seam := absf(wrapf(angle,-PI,PI))
+				if seam < 0.035: tint = hues[0].darkened(0.27)
+				if seam > 0.30 and seam < 0.85 and j in [7,8,9]: tint = hues[2]
+			surface.set_color(tint)
+			surface.set_normal(up.cross(across).normalized())
+			surface.add_vertex(point)
+	var near := GarmentMesh.rings(sides, PackedInt32Array(range(rows.size())))
+	if not cloth:
+		for index in near: surface.add_index(index)
+		return surface.commit()
+	# Keep the collar, shoulder straps, pocket and hem bands in the middle LOD.
+	var middle := GarmentMesh.rings(sides, [0,1,2,4,5,6,7,9,11,13,15,16,17], 2)
+	var far := GarmentMesh.rings(sides, [0,2,5,7,10,13,15,17], 2)
+	return GarmentMesh.finish(surface, near, middle, far)
 
 func _hair_point(angle: float, f: float, height: float) -> Vector3:
 	var front := smoothstep(-0.50,0.83,cos(angle))
@@ -495,23 +598,41 @@ func _boxers(w: Vector3, tint: Color) -> void:
 	pivot.add_child(shorts_rig)
 	shorts_rig.add_bone("Waist")
 	shorts_rig.set_bone_rest(0,Transform3D.IDENTITY)
+	var ratio: float = LEG_LENGTH[outfit]
+	for index in 2:
+		var side := -1.0 if index==0 else 1.0
+		var joint := Vector3(side*w.z*0.58,0.85*ratio,0.004)
+		shorts_rig.add_bone("ThighL" if index==0 else "ThighR")
+		shorts_rig.set_bone_rest(index+1,Transform3D(Basis.IDENTITY,joint))
+	shorts_rig.reset_bone_poses()
+	var key := outfit + "/BaseShorts"
+	if not garment_meshes.has(key): garment_meshes[key] = _shorts_mesh(w,tint)
+	var shorts := MeshInstance3D.new()
+	shorts.name = "BaseShorts"
+	shorts.mesh = garment_meshes[key]
+	shorts.material_override = body_material
+	shorts_rig.add_child(shorts)
+	shorts.skeleton = NodePath("..")
+	shorts.skin = shorts_rig.create_skin_from_rest_transforms()
+
+func _shorts_mesh(w: Vector3, tint: Color) -> ArrayMesh:
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	surface.set_smooth_group(0)
 	var mass: float = LIMB_GIRTH[outfit]
 	var ratio: float = LEG_LENGTH[outfit]
-	const AROUND := 24
+	const AROUND := 20
 	const ROWS := 7
+	var near := PackedInt32Array()
+	var middle := PackedInt32Array()
+	var far := PackedInt32Array()
 	for index in 2:
 		var side := -1.0 if index==0 else 1.0
 		var bone := index+1
-		var joint := Vector3(side*w.z*0.58,0.85*ratio,0.004)
-		shorts_rig.add_bone("ThighL" if index==0 else "ThighR")
-		shorts_rig.set_bone_parent(bone,-1)
-		shorts_rig.set_bone_rest(bone,Transform3D(Basis.IDENTITY,joint))
-		var start := index*(AROUND+1)*ROWS
+		var joint := shorts_rig.get_bone_rest(bone).origin
+		var start := index*AROUND*ROWS
 		for row in ROWS:
-			for i in AROUND+1:
+			for i in AROUND:
 				var angle := TAU*i/AROUND
 				var wave := sin(angle)
 				var across := maxf(0,wave)
@@ -536,21 +657,10 @@ func _boxers(w: Vector3, tint: Color) -> void:
 				surface.set_weights(PackedFloat32Array([1.0-influence,influence,0,0]))
 				surface.set_color(tint.lightened(0.16 if row<2 else 0.055 if row==6 else 0.0))
 				surface.add_vertex(point)
-		for row in ROWS-1:
-			for i in AROUND:
-				var a := start+row*(AROUND+1)+i
-				var down := a+AROUND+1
-				var order := [a,down,a+1,a+1,down,down+1] if side>0 else [a,a+1,down,a+1,down+1,down]
-				for item in order:
-					surface.add_index(item)
-	shorts_rig.reset_bone_poses()
-	surface.generate_normals()
-	var shorts := MeshInstance3D.new()
-	shorts.mesh = surface.commit()
-	shorts.material_override = body_material
-	shorts_rig.add_child(shorts)
-	shorts.skeleton = NodePath("..")
-	shorts.skin = shorts_rig.create_skin_from_rest_transforms()
+		near.append_array(GarmentMesh.rings(AROUND, [0,1,2,3,4,5,6], 1, side>0, start))
+		middle.append_array(GarmentMesh.rings(AROUND, [0,1,2,3,4,6], 2, side>0, start))
+		far.append_array(GarmentMesh.rings(AROUND, [0,2,3,4,6], 2, side>0, start))
+	return GarmentMesh.finish(surface, near, middle, far)
 
 func _leg(hip_width: float, side: int, skin: Color) -> void:
 	var hip := _joint(pivot,Vector3(side*hip_width*0.58,0.85*float(LEG_LENGTH[outfit]),0.004))
@@ -617,8 +727,18 @@ func _costume(parent:Node3D, id:String, at:Vector3, size:=Vector3.ONE)->void:
 	if parent!=equipment: sleeves.append(piece)
 
 func _dress() -> void:
+	garment_motion.clear()
+	garment_elapsed = 0.0
 	_dress_equipment()
+	if undershirt.visible: _bind_garment(undershirt)
+	if accessories.legs.is_empty(): _bind_garment(shorts_rig.get_child(0))
+	for piece in equipment.get_children(): _bind_garment(piece)
+	for piece in sleeves: _bind_garment(piece)
 	if first_person_body: _shadow_meshes(self)
+
+func _bind_garment(piece: Node) -> void:
+	if piece is MeshInstance3D and GarmentMotion.PROFILES.has(piece.name):
+		garment_motion.append(GarmentMotion.new(piece))
 
 func _dress_equipment() -> void:
 	_reset_children(equipment)
@@ -652,10 +772,14 @@ func _dress_equipment() -> void:
 	if accessories.head=="hardhat":
 		sleeves.append(_skin(skull,GEAR_ART.helmet()))
 	elif accessories.head=="alpine_cap":
-		sleeves.append(_skin(skull,GEAR_ART.cap()))
+		var cap := _skin(skull,GEAR_ART.cap())
+		cap.name = "AlpineCap"
+		sleeves.append(cap)
 	for i in wrist_joints.size():
 		if accessories.hands=="work_gloves":
-			sleeves.append(_skin(wrist_joints[i],GEAR_ART.glove(-1 if i==0 else 1)))
+			var glove := _skin(wrist_joints[i],GEAR_ART.glove(-1 if i==0 else 1))
+			glove.name = "WorkGlove"
+			sleeves.append(glove)
 		if accessories.feet=="trail_boots":
 			sleeves.append(_skin(ankle_joints[i],GEAR_ART.boot()))
 		if accessories.hands=="meme_claws": _costume(wrist_joints[i],"meme_claws",Vector3.ZERO)
@@ -666,6 +790,9 @@ func _dress_equipment() -> void:
 	if accessories.muzzle=="meme_whiskers": _costume(skull,accessories.muzzle,Vector3(0,1.605,-0.136))
 	if accessories.back=="meme_tail": _costume(equipment,accessories.back,Vector3(0,0.92,0.125))
 	if accessories.back=="meme_clock": _costume(equipment,accessories.back,Vector3(0,1.26,0.153))
+	if accessories.back=="meme_shawl":
+		var shoulder_scale: float = WIDTHS[outfit].x / WIDTHS.ranger.x
+		_costume(equipment, accessories.back, Vector3(0, 1.44, 0), Vector3(shoulder_scale, 1, 1))
 	if equipped in ["meme_duck","meme_alien"]:
 		_costume(equipment,equipped,Vector3(0,0.99 if equipped=="meme_duck" else 1.215,0))
 		return
@@ -673,34 +800,60 @@ func _dress_equipment() -> void:
 		return
 	var w:Vector3 = WIDTHS[outfit]
 	if equipped=="sun_cape":
-		_skin(equipment,GEAR_ART.cape(w))
+		_skin(equipment,GEAR_ART.cape(w)).name = "sun_cape"
 		return
 	if equipped=="oilskin_vest":
 		var wax := Color("#998442",0.5)
 		_shirt(w,[wax,wax,wax.darkened(0.17)],Color.WHITE,true)
 		return
-	var gear := Sculpt.new(1207)
 	if equipped=="armor":
+		_outer_piece(equipment, "ArmorPlates")
+	else:
+		_outer_piece(equipment, "CoatBody")
+		for i in 2:
+			var side := -1 if i==0 else 1
+			sleeves.append(_outer_piece(arms[i], "CoatSleeve", side))
+			sleeves.append(_outer_piece(elbows[i], "CoatCuff", side))
+
+func _outer_piece(parent: Node3D, component: String, side := 0) -> MeshInstance3D:
+	var key := outfit + "/" + component + str(side)
+	if not garment_meshes.has(key):
+		var detail := _outer_shape(component, side, false)
+		var coarse := _outer_shape(component, side, true)
+		garment_meshes[key] = GarmentMesh.sculpted(detail.commit(), coarse.commit())
+	var mesh := MeshInstance3D.new()
+	mesh.name = component
+	mesh.mesh = garment_meshes[key]
+	mesh.material_override = body_material
+	parent.add_child(mesh)
+	return mesh
+
+func _outer_shape(component: String, side: int, coarse: bool) -> Sculpt:
+	var gear := Sculpt.new(1207)
+	var w: Vector3 = WIDTHS[outfit]
+	if component == "ArmorPlates":
 		for i in 4:
 			var radius := lerpf(w.y,w.x,0.24+i*0.23)
 			gear.loft([Vector4(1.005+i*0.081,radius+0.015,0.158,0),Vector4(1.081+i*0.081,radius+0.026,0.165,-0.002)],
-				Color("#59676b").lightened(i*0.038))
-		for side in [-1,1]:
-			gear.twig([Vector3(side*0.142,1.30,-0.116),Vector3(side*0.147,1.415,-0.057),Vector3(side*0.144,1.422,0.026),Vector3(side*0.147,1.30,0.125)],
-				[0.028,0.029,0.03,0.03],Color("#685645"),7)
-	else:
+				Color("#59676b").lightened(i*0.038),Vector3.ZERO,Basis.IDENTITY,8 if coarse else 10)
+		for sign_x: int in [-1,1]:
+			gear.twig([Vector3(sign_x*0.142,1.30,-0.116),Vector3(sign_x*0.147,1.415,-0.057),Vector3(sign_x*0.144,1.422,0.026),Vector3(sign_x*0.147,1.30,0.125)],
+				[0.028,0.029,0.03,0.03],Color("#685645"),4 if coarse else 6)
+	elif component == "CoatBody":
+		# A looser distant octagon clears the chest between its vertices. Keep
+		# the close-fit twelve-sided bodice over the original skin geometry.
+		var ease := 1.06 if coarse else 1.0
 		gear.loft([Vector4(0.775,w.z+0.055,0.166,0.015),Vector4(0.96,w.y+0.03,0.153,0.004),Vector4(1.11,w.y+0.03,0.16,0.004),
-			Vector4(1.30,w.x+0.01,0.168,0.002),Vector4(1.402,w.x,0.14,0),Vector4(1.445,0.095,0.096,0.006)],Color("#78654e"))
-		for i in 2:
-			var sleeve := Sculpt.new(1208)
-			var side := -1 if i==0 else 1
-			sleeve.twig([Vector3(-side*0.006,0.025,0),Vector3(side*0.015,-0.039,0),elbows[i].position],
-				[0.094,0.108,0.079],Color("#78654e"),12)
-			sleeves.append(_skin(arms[i],sleeve))
-			var cuff := Sculpt.new(1209)
-			cuff.loft([Vector4(-0.206,0.061,0.064,-0.008),Vector4(-0.082,0.077,0.077,0.008),Vector4(0.02,0.081,0.080,0.008)],Color("#76634e"))
-			sleeves.append(_skin(elbows[i],cuff))
-	_skin(equipment,gear)
+			Vector4(1.30,w.x+0.01,0.168,0.002),Vector4(1.402,w.x,0.14,0),Vector4(1.445,0.095,0.096,0.006)],
+			Color("#78654e"),Vector3.ZERO,Basis.from_scale(Vector3(ease,1.0,ease)),8 if coarse else 12)
+	elif component == "CoatSleeve":
+		var elbow := elbows[0 if side < 0 else 1]
+		gear.twig([Vector3(-side*0.006,0.025,0),Vector3(side*0.015,-0.039,0),elbow.position],
+			[0.094,0.108,0.079],Color("#78654e"),6 if coarse else 10)
+	else:
+		gear.loft([Vector4(-0.206,0.061,0.064,-0.008),Vector4(-0.082,0.077,0.077,0.008),Vector4(0.02,0.081,0.080,0.008)],
+			Color("#76634e"),Vector3.ZERO,Basis.IDENTITY,6 if coarse else 10)
+	return gear
 
 var action_kind:=""
 var action_time:=0.0
@@ -710,21 +863,49 @@ func act(kind:String) -> void:
 		action_kind=kind
 		action_time=0.0
 
-func pose(dt: float, foot_speed: float, duck: float, swimming:bool=false) -> void:
+func pose(dt: float, foot_speed: float, duck: float, swimming := false, world_velocity := Vector3.INF,
+		grounded := true, floor_normal := Vector3.UP, seated := false) -> void:
+	garment_swimming = swimming
 	if not is_instance_valid(motion_world):
-		_animate_pose(dt, foot_speed, duck, swimming)
+		_animate_pose(dt, foot_speed, duck, swimming, world_velocity, grounded, floor_normal)
 		return
-	if not is_visible_in_tree(): return
-	var drive := ActiveMotion.wanted(motion_world, global_position, active_motion, first_person_body)
-	if is_instance_valid(active_motion):
-		if drive: active_motion.restore_targets()
-		else: stop_live_motion()
-	_animate_pose(dt, foot_speed, duck, swimming)
-	if drive:
-		if not is_instance_valid(active_motion): active_motion = ActiveMotion.start(self, self, motion_world.stream, first_person_body)
-		if is_instance_valid(active_motion): active_motion.capture_targets()
+	if not is_visible_in_tree() and not seated: return
+	if is_instance_valid(active_motion): active_motion.restore_targets()
+	if getup: getup.restore_targets()
+	_animate_pose(dt, foot_speed, duck, swimming, world_velocity, grounded, floor_normal)
+	if seated:
+		pivot.position.y = -0.83 * float(STATURE[outfit]) * float(LEG_LENGTH[outfit])
+		for i in 2:
+			legs[i].rotation.x = 1.32
+			knees[i].rotation.x = -1.40
+			ankle_joints[i].rotation.x = 0.08
+		sync_joint_skins()
+	if getup:
+		if getup.blend(dt): getup = null
+		else: sync_joint_skins()
+	if not is_instance_valid(active_motion):
+		active_motion = ActiveMotion.start(motion_world, self, motion_world.stream, first_person_body)
+		if active_motion and is_instance_valid(seat_vehicle):
+			for part in active_motion._parts: part.body.add_collision_exception_with(seat_vehicle)
+	if active_motion:
+		active_motion.balance.support_enabled = grounded and not swimming and not seated
+		active_motion.capture_targets()
 
-func _animate_pose(dt: float, foot_speed: float, duck: float, swimming:bool=false) -> void:
+func _foot_surface(at: Vector3) -> Dictionary:
+	var query := PhysicsRayQueryParameters3D.create(at + Vector3.UP * 0.31, at + Vector3.DOWN * 0.43, 3)
+	return get_world_3d().direct_space_state.intersect_ray(query)
+
+func _fall_surface(from: Vector3, to: Vector3) -> Dictionary:
+	var query := PhysicsRayQueryParameters3D.create(from, to, 1 | 2 | 8)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if not hit.is_empty() and motion_world is WastelandSession:
+		var floor_point: Vector3 = hit.position
+		if floor_point.y < WastelandTerrainGen.WATER_LEVEL - 1.4 and motion_world.stream.water_at(floor_point):
+			return {}
+	return hit
+
+func _animate_pose(dt: float, foot_speed: float, duck: float, swimming := false, world_velocity := Vector3.INF,
+		grounded := true, floor_normal := Vector3.UP) -> void:
 	if arms.size()!=2:
 		return
 	var speed:=clampf(foot_speed/4.9,0.0,1.5)
@@ -735,11 +916,37 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming:bool=fals
 	var crouch_hip:=0.83*duck_amount
 	var crouch_knee:=1.62*duck_amount
 	var leg_ratio:float=LEG_LENGTH[outfit]
+	var walking := world_velocity.is_finite() and not swimming
+	if walking:
+		var probe := Callable()
+		var fall_probe := Callable()
+		if is_instance_valid(motion_world) and (first_person_body or is_instance_valid(active_motion)):
+			probe = _foot_surface
+			fall_probe = _fall_surface
+		var recovery_foot := -1
+		if is_instance_valid(active_motion) and active_motion.balance != null:
+			recovery_foot = active_motion.balance.stepping_foot
+		gait.advance(dt, global_transform, world_velocity, grounded, floor_normal, duck_amount,
+			absf(legs[0].position.x), leg_ratio, probe, recovery_foot, fall_probe)
+		strength = gait.swing_strength
+		cycle = sin(TAU * gait.phase)
+	elif swimming:
+		gait.reset()
 	# Shorten the pelvis-to-floor distance as the thighs and shins fold.
 	var sink:float=(0.39*(1.0-cos(crouch_hip))+0.354*(1.0-cos(crouch_knee-crouch_hip)))*leg_ratio
 	pivot.position.y=(-sink+0.020*absf(cycle)*strength)*float(STATURE[outfit])
 	var pitch:=-0.041-duck_amount*0.30-strength*0.055
 	jacket.rotation=Vector3(pitch,cycle*strength*0.11,0.012+cos(stride)*strength*0.026)
+	pivot.position.x = gait.support_sway if walking else 0.0
+	neck.rotation.x = 0.0
+	if walking:
+		pivot.rotation.x = 0.0
+		pivot.position.y = -sink * float(STATURE[outfit]) - gait.drop
+		gait.load_supporting_legs(pivot, legs, dt)
+		jacket.rotation = Vector3(-0.041 - duck_amount * 0.30 + gait.local_velocity.z * 0.010 + gait.lean.z * 0.008,
+			cycle * strength * 0.104, 0.012 + gait.support_sway * 1.10 - gait.lean.x * 0.007)
+		jacket.rotation.x -= 0.09 * gait.fall_spread + 0.26 * gait.fall_brace + 1.15 * gait.landing
+		neck.rotation.x = -0.12 * gait.fall_spread - 0.29 * gait.fall_brace
 	offhand_blend=move_toward(offhand_blend,float(offhand_block),dt*5.5)
 	action_time+=dt
 	var duration:=0.68 if action_kind=="tool" else 0.24 if action_kind=="fire" else 0.44
@@ -758,10 +965,6 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming:bool=fals
 	if not action_kind.is_empty(): jacket.rotation.y+=0.26*windup-0.32*drive
 	var torso_anchor:=Vector3(0,0.975*jacket.scale.y,0)
 	jacket.position=Vector3(0,0.85*leg_ratio+0.125*jacket.scale.y,0)-jacket.basis.orthonormalized()*torso_anchor
-	var waist_rotation:=jacket.basis.orthonormalized()
-	var waist_y:=0.85*leg_ratio+0.125*jacket.scale.y
-	shorts_rig.set_bone_pose_rotation(0,waist_rotation.get_rotation_quaternion())
-	shorts_rig.set_bone_pose_position(0,Vector3.UP*waist_y-waist_rotation*(Vector3.UP*waist_y))
 	for i in 2:
 		var side:float=-1 if i==0 else 1
 		var run:=smoothstep(4.3,7.2,foot_speed)
@@ -770,10 +973,18 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming:bool=fals
 		var lifted:=maxf(0.0,-cos(phase))*strength
 		var thigh:=0.030+step*(0.53+0.21*run)+crouch_hip
 		var knee_bend:=-0.059-lifted*(0.74+0.38*run)-crouch_knee
-		legs[i].rotation=Vector3(thigh,side*(0.080+duck_amount*0.04),side*(0.021+duck_amount*0.095))
-		knees[i].rotation.x=knee_bend
-		ankle_joints[i].rotation.x=-(thigh+knee_bend)*(1.0-0.54*lifted)-lifted*0.19
+		if walking:
+			gait.solve(i, pivot, legs[i], knees[i], ankle_joints[i])
+			# Sagittal swing reverses when backing up. A sidestep has a shorter fore-aft reach.
+			var forward := -gait.local_velocity.z / maxf(0.5, gait.local_velocity.length())
+			step = cos(TAU * (gait.phase + i * 0.5)) * strength * forward
+		else:
+			legs[i].rotation=Vector3(thigh,side*(0.080+duck_amount*0.04),side*(0.021+duck_amount*0.095))
+			knees[i].rotation=Vector3(knee_bend,0,0)
+			ankle_joints[i].rotation=Vector3(-(thigh+knee_bend)*(1.0-0.54*lifted)-lifted*0.19,0,0)
 		arms[i].rotation=Vector3(0.045-step*(0.44+0.25*run)+duck_amount*0.16,side*(0.050+step*0.058),side*(0.039+duck_amount*0.084))
+		if walking:
+			arms[i].rotation.z += gait.local_velocity.x * (0.014 + side * cycle * 0.009)
 		elbows[i].rotation=Vector3(0.14+0.27*strength+0.32*run+0.48*duck_amount+maxf(0,-step)*0.17,side*0.090,-side*0.11)
 		wrist_joints[i].rotation=Vector3(-0.061,-side*0.070,-side*0.07)
 		if swimming:
@@ -804,10 +1015,14 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming:bool=fals
 				left_grip.global_transform.basis=global_transform.basis
 				if offhand_shield and is_instance_valid(offhand_prop):
 					offhand_prop.rotation.y=lerpf(0.68,0.08,offhand_blend)
+		if walking:
+			# The arms open for balance early. The elbows come in front of the face and upper chest near impact.
+			var spread := gait.fall_spread * (1.0 - gait.fall_brace * 0.76)
+			var brace := gait.fall_brace
+			arms[i].rotation += Vector3(0.37 * spread + 0.96 * brace + 1.33 * gait.landing,
+				-side * 0.17 * brace, side * (0.91 * spread + 0.22 * brace))
+			elbows[i].rotation.x += 0.29 * spread + 0.69 * brace + 1.25 * gait.landing
+			wrist_joints[i].rotation.x -= 0.26 * brace
 		if i==1 and is_inside_tree() and is_instance_valid(primary_shield):
 			primary_shield.global_basis=global_basis*Basis(Vector3.UP,-0.68)
-		shorts_rig.set_bone_pose_rotation(i+1,legs[i].quaternion)
-		arm_rigs[i].set_bone_pose_rotation(1,elbows[i].quaternion)
-		arm_rigs[i].set_bone_pose_rotation(2,wrist_joints[i].quaternion)
-		leg_rigs[i].set_bone_pose_rotation(1,knees[i].quaternion)
-		leg_rigs[i].set_bone_pose_rotation(2,ankle_joints[i].quaternion)
+	sync_joint_skins()

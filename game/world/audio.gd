@@ -17,6 +17,7 @@ var local_impact := AudioStreamPlayer.new()
 var heartbeat := AudioStreamPlayer.new()
 var underwater_filter := AudioEffectLowPassFilter.new()
 var ambience_bus := -1
+var shawl_speech := preload("res://game/world/shawl_voice.gd").new()
 
 func _ready() -> void:
 	ambience_bus = AudioServer.get_bus_index("Ambience")
@@ -106,6 +107,14 @@ func play_at(id: String, at: Vector3, loudness: float = 1.0, occlusion: bool = t
 		relay.call(id,at,loudness)
 	if is_instance_valid(listener) and listener.global_position.distance_squared_to(at) > 88.0 * 88.0:
 		return
+	var pitch := randf_range(0.87, 1.12) if id not in ["alarm", "thunder"] else 1.0
+	_play_clip(samples[id], at, loudness, pitch, occlusion)
+
+func play_shawl_voice(at: Vector3) -> void:
+	# Each speaker's caption is already rate-limited and delivered by the host.
+	_play_clip(shawl_speech.phrase(), at + Vector3.UP * 1.38, 0.58, randf_range(0.95, 1.08), true)
+
+func _play_clip(clip: AudioStream, at: Vector3, loudness: float, pitch: float, occlusion: bool) -> void:
 	voice_cursor = (voice_cursor + 1) % VOICES
 	var slot := voice_cursor
 	for index in VOICES:
@@ -116,8 +125,8 @@ func play_at(id: String, at: Vector3, loudness: float = 1.0, occlusion: bool = t
 	var voice := voices[slot]
 	voice.stop()
 	voice.global_position = at
-	voice.stream = samples[id]
-	voice.pitch_scale = randf_range(0.87, 1.12) if id not in ["alarm", "thunder"] else 1.0
+	voice.stream = clip
+	voice.pitch_scale = pitch
 	voice.volume_db = linear_to_db(maxf(0.001, loudness)) + (-6.5 if occlusion and _blocked(at) else 0.0)
 	voice.play()
 

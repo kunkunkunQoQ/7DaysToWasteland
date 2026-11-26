@@ -152,6 +152,10 @@ func pose(actor: Node3D, speed: float, brace: float, delta: float) -> void:
 		target.z += step * travel * (1.0 + turn * 0.14 * signf(limb.socket.x))
 		target.y += leg_length * height * motion * (0.20 + gather * (0.58 if springer else 0.19))
 		target.y += leg_length * suspension * profile.w * height
+		if actor.foot_contacts.enabled and not (kind == "jerboa" and not rear):
+			# Support IDs are left/right front, then left/right hind. The model
+			# orders its bones right/left hind, then right/left front.
+			target = actor.foot_contacts.target(3-i, actor.rig.global_transform, target, stance or motion < 0.01, swing, leg_length * scale_z * 0.48)
 		var foot_support := (1.0 - height * 0.84) * (1.0 - swim)
 		var floor_y := -tangent.dot(Vector2(target.x, target.z))
 		target.y += (floor_y + limb.rest_paw.y * (1.0 / floor_normal.y - 1.0)) * (1.0 - swim)

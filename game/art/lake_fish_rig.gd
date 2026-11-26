@@ -78,7 +78,7 @@ func animate(beat: float, effort: float) -> void:
 	spine.transform = spine_transform(beat,effort)
 	tail.transform = tail_transform(beat,effort)
 
-# A promoted single fish uses the same silhouette and colours as the three school draw batches.
+# The school draws these segments in batches using the same bones as an individual fish.
 func build_physical(form: String, variant: int, beat: float, effort: float) -> Skeleton3D:
 	set_process(false)
 	var skeleton := Skeleton3D.new()

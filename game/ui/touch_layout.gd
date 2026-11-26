@@ -2,10 +2,10 @@ extends RefCounted
 
 const CAPTIONS := {
 	"fire":"主动作","use":"交互","jump":"跳跃","crouch":"蹲下","sprint":"冲刺",
-	"alternate":"副动作","more":"更多","inventory":"背包","map":"地图","pause_game":"暂停",
+	"alternate":"副动作","more":"更多","inventory":"背包","map":"地图","pause_game":"暂停","chat":"聊天",
 	"reload":"装填","flashlight":"提灯","shape":"形状","rotate":"旋转","journal":"委托","discard":"丢弃","offhand_use":"副手","swap_hands":"换手"}
 
-const EXTRA := ["map","journal","flashlight","reload","shape","rotate","swap_hands","discard"]
+const EXTRA := ["map","journal","flashlight","reload","shape","rotate","swap_hands","discard","chat"]
 static var active := OS.has_feature("android") or OS.has_feature("ios") or "--touch-controls" in OS.get_cmdline_user_args()
 
 static func action_caption(id:String)->String:

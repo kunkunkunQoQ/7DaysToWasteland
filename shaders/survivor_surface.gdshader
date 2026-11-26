@@ -3,9 +3,30 @@ shader_type spatial;
 // Opaque vertex regions authored by the character mesh: trim .25, cotton .5,
 // skin .75 and unmodified accessories 1. Coordinates follow each animated limb.
 varying vec3 rest_point;
+uniform vec3 hem_axis = vec3(0.0, -1.0, 0.0);
+uniform vec2 hem_limits = vec2(0.0, 1.0);
+uniform vec4 hem_motion = vec4(0.0);
+uniform bool two_ends = false;
+uniform bool wraps_body = false;
 
 void vertex() {
 	rest_point = VERTEX;
+	if (hem_motion != vec4(0.0)) {
+		float along = dot(VERTEX, hem_axis);
+		float span = hem_limits.y - hem_limits.x;
+		float t = clamp(((two_ends ? abs(along) : along) - hem_limits.x) / span, 0.0, 1.0);
+		float weight = t * t * (3.0 - 2.0 * t);
+		vec3 shift = hem_motion.xyz + vec3(VERTEX.z, 0.0, -VERTEX.x) * hem_motion.w;
+		if (wraps_body) {
+			vec2 radial = VERTEX.xz / max(length(VERTEX.xz), 0.001);
+			shift.xz -= radial * min(dot(shift.xz, radial), 0.0);
+		}
+		VERTEX += shift * weight;
+		// Tilt the lighting normals with the bending fabric, keeping the seam normal fixed.
+		vec3 slope = hem_axis * ((two_ends ? sign(along) : 1.0) * 6.0 * t * (1.0 - t) / span);
+		NORMAL = normalize(NORMAL - slope * dot(NORMAL, shift)
+			+ vec3(NORMAL.z, 0.0, -NORMAL.x) * hem_motion.w * weight);
+	}
 }
 
 float filtered_wave(float cycles) {

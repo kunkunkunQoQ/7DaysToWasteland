@@ -18,6 +18,11 @@ func _start() -> void:
 	s.player.camera.look_at(patch.fishes)
 	_advance(s,0.1)
 	_check(lake.drivers.has(patch.heron_id) and not lake.individual_fish.is_empty(),"nearby wading heron and individual swimming fish use active joint drives")
+	var initial_rigs := {}
+	for id in patch.fish_ids:
+		if lake.drivers.has(id) and not lake.drivers[id].balance.support_enabled:
+			initial_rigs[id] = lake.drivers[id].get_instance_id()
+	_check(initial_rigs.size()==lake.SCHOOL_SIZE and patch.school.visible and lake.individual_fish[patch.fish_ids[0]].model.visible==false,"six swimming rigs have independent bodies, no ground steps and one school rendering each segment")
 	if not lake.individual_fish.is_empty():
 		var id: String = lake.individual_fish.keys()[0]
 		var drive: Node3D = lake.drivers[id]
@@ -34,6 +39,7 @@ func _start() -> void:
 		await _done()
 		return
 	var point: Vector3 = patch.fish_poses[patch.fish_ids.find(fish_id)].origin
+	var swimming_rids := _joint_rids(lake.drivers[fish_id])
 	var origin := point + Vector3.UP * 2.0
 	var barrier := WastelandLook.solid(s,Vector3(1.0,0.20,1.0),point+Vector3.UP*0.9,Color.BROWN)
 	await physics_frame
@@ -50,11 +56,16 @@ func _start() -> void:
 	var records := lake.combat_snapshot()
 	var dead: bool = records.has(fish_id) and records[fish_id].hp <= 0 and lake.combat.bodies.has(fish_id)
 	_check(dead,"an unobstructed projectile creates a physical fish corpse (%s, damaged %s, bodies %s)" % [fish_id,records.keys(),lake.combat.bodies.keys()])
+	_check(dead and _joint_rids(lake.combat.bodies[fish_id].rig)==swimming_rids,"the seven swimming body RIDs become the dead fish's same seven bodies")
 	_check(records.size() == 1 and _visible_fish(patch) == lake.SCHOOL_SIZE-1,"five other members of the same school continue swimming")
 	var eye := patch.fish_center + Vector3.UP*2.0
 	_check(lake.observation(eye,Vector3.DOWN,3.0).get("type") == "lake_fish","the remaining school can still be observed")
 	if dead:
 		_check(s.save_now(false) == OK and WastelandSave.read(1).get("lake_combat",{}).has(fish_id),"world save includes the dead individual's identity")
+		lake.restore_combat({})
+		lake.restore_combat(records)
+		_advance(s,0.016)
+		_check(lake.combat.bodies.has(fish_id) and not lake.drivers.has(fish_id) and lake.combat_snapshot()[fish_id].pose.size()==records[fish_id].pose.size(),"a saved or incoming pose recreates the missing fish corpse before its live route exists")
 		var remaining: float = records[fish_id].until-s.clock.elapsed
 		_advance(s,remaining-0.25)
 		_check(lake.combat.bodies.has(fish_id),"fish remains visible shortly before its 20 seconds elapse")
@@ -68,7 +79,23 @@ func _start() -> void:
 		_check(lake.combat.absent(fish_id),"observed habitat stays empty across a save and a full world day")
 		s.player.global_position += Vector3.RIGHT * 150.0
 		_advance(s,0.1)
-		_check(not lake.combat_snapshot().has(fish_id) and lake.individual_fish.is_empty(),"unobserved habitat replenishes after a day and far fish return to the school batch")
+		var continuous := 0
+		for id: String in initial_rigs:
+			if id!=fish_id and lake.drivers.has(id) and lake.drivers[id].get_instance_id()==initial_rigs[id]: continuous+=1
+		_check(not lake.combat_snapshot().has(fish_id) and lake.drivers.has(fish_id) and continuous==5,"offscreen replenishment restores the sixth fish while the five survivors keep their same bodies 150 metres away")
+	_prepare(s,patch)
+	var survivor := _clear_fish(s,patch)
+	var fish_recovered := false
+	if survivor!="":
+		var fish_rig: Node3D = lake.drivers[survivor]
+		var rids := _joint_rids(fish_rig)
+		var target: Vector3 = patch.fish_poses[patch.fish_ids.find(survivor)].origin
+		var hit := s.weapon_hit(target+Vector3.UP*2.0,target,[])
+		lake.strike(hit,1.0,target+Vector3.UP)
+		var same_fish: bool = lake.combat.bodies.has(survivor) and _joint_rids(lake.combat.bodies[survivor].rig)==rids
+		_advance(s,1.2)
+		fish_recovered = same_fish and lake.drivers.get(survivor)==fish_rig and _joint_rids(fish_rig)==rids and fish_rig.pose_applied.get_connections().size()==1
+	_check(fish_recovered,"a wounded fish resumes the school batch once with the same seven physics bodies")
 	var seen := {}
 	for specimen in lake.bottom_life:
 		if seen.has(specimen.species): continue
@@ -80,24 +107,77 @@ func _start() -> void:
 		var id: String = specimen.get_meta("lake_id")
 		var distal := "PaddleR1" if specimen.species == "pond_turtle" else "PincerL"
 		var driving: Node3D = lake.drivers.get(id)
+		var before_fall := _joint_rids(driving)
 		_check(driving != null and driving.body_for(distal) != null and driving.find_children("*","RigidBody3D",false,false).size() == specimen.bones.get_bone_count(),"every visible joint follows active physics, including " + distal)
+		if driving != null:
+			var turtle := specimen.species=="pond_turtle"
+			_check(driving.balance.support_enabled!=turtle and specimen.travel_speed>0.0 and (turtle or specimen.basis.y.dot(s.stream.ground_normal_at(specimen.position))>0.96),"live "+specimen.species+" stroke follows travel with swimming or lakebed support")
 		var probe := s.weapon_hit(target+Vector3.UP*0.65,target,[])
 		_check(probe.get("aquatic") == id,"weapon ray picks the articulated " + specimen.species)
 		if probe.get("aquatic") == id:
 			s.projectile_hit("bullet",1.0,probe,s.player,target + Vector3.UP)
 			_check(lake.combat.bodies.has(id) and lake.combat_snapshot()[id].hp > 0,specimen.species + " survives a hit in a physical knockdown")
+			var same_fallen: bool = lake.combat.bodies.has(id) and _joint_rids(lake.combat.bodies[id].rig)==before_fall
 			_advance(s,2.0)
 			_check(not lake.combat.bodies.has(id) and not lake.combat.absent(id),specimen.species + " returns to its route after recovering")
+			_check(same_fallen and lake.drivers.has(id) and lake.drivers[id]==driving and _joint_rids(lake.drivers[id])==before_fall,specimen.species+" keeps every physics body RID from walking or swimming through knockdown and recovery")
 		seen[specimen.species] = true
 	_check(seen.has_all(["pond_turtle","crayfish"]),"both bottom-dwelling species exercised")
 	_prepare(s,patch)
+	await _natural_flight(s,patch)
 	var bird := _joint(patch.upper,"Breast")
 	s.player.camera.global_position = bird+Vector3.UP*1.2
 	s.player.camera.look_at(bird,Vector3.FORWARD)
 	var confirms := s.player.confirmed_hit
+	var heron_rids := _joint_rids(lake.drivers[patch.heron_id])
 	s._melee({},1.0)
 	_check(s.player.confirmed_hit == confirms+1 and lake.combat_snapshot().has(patch.heron_id),"an actual bare-handed swing hits the heron and confirms to the attacker")
+	var same_bird: bool = lake.combat.bodies.has(patch.heron_id) and _joint_rids(lake.combat.bodies[patch.heron_id].rig)==heron_rids
+	_advance(s,1.2)
+	_check(same_bird and lake.drivers.has(patch.heron_id) and _joint_rids(lake.drivers[patch.heron_id])==heron_rids,"the landed heron resumes its route with its original physics bodies")
+	s.stream.refresh(patch.fishes+Vector3.RIGHT*600.0,1)
+	_advance(s,0.1)
+	_check(patch.fish_ids.all(func(id): return not lake.drivers.has(id) and not lake.individual_fish.has(id)),"unloading physical terrain releases the whole school's bodies")
 	await _done()
+
+func _natural_flight(s: WastelandSession,patch: WastelandLakeWildlife.Habitat) -> void:
+	var lake := s.stream.lake_wildlife
+	for perch in patch.perches: s.stream.ensure_landing(perch)
+	s.player.global_position = patch.perches[0]+Vector3.UP*13.0
+	_advance(s,lake.FLIGHT_TIME+1.1)
+	s.player.global_position = patch.bird.position+Vector3.UP*1.0
+	_advance(s,1.0/60.0)
+	var departure := patch.took_off
+	s.player.global_position = patch.perches[0]+Vector3.UP*13.0
+	var drive: Node3D = lake.drivers.get(patch.heron_id)
+	var no_air_steps := drive!=null and is_equal_approx(departure,s.clock.elapsed)
+	var tucked := 2.0
+	var extended := 0.0
+	var springs := 0.0
+	var peak_bank := 0.0
+	var forward_sum := 0.0
+	var samples := 0
+	for i in 255:
+		var old := patch.fish_poses[0].origin
+		_advance(s,1.0/60.0)
+		await physics_frame
+		var elapsed := s.clock.elapsed-departure
+		if drive!=null:
+			if elapsed>0.22 and elapsed<lake.FLIGHT_TIME:
+				no_air_steps = no_air_steps and not drive.balance.support_enabled and drive.balance.stepping_foot<0
+			var length_y := _joint(patch.upper,"ThighL").y-_joint(patch.upper,"FootL").y
+			if elapsed>1.1 and elapsed<2.0: tucked = minf(tucked,length_y)
+			if elapsed>3.10 and elapsed<3.5: extended = maxf(extended,length_y)
+			if elapsed>3.60 and elapsed<3.92:
+				springs = maxf(springs,patch.upper.HIP.y-patch.upper.bones.get_bone_pose_position(patch.upper.bone_ids.Breast).y)
+		var pose := patch.fish_poses[0]
+		if i>30 and old.is_finite() and pose.origin.is_finite() and old.distance_to(pose.origin)>0.001:
+			peak_bank = maxf(peak_bank,absf(pose.basis.orthonormalized().get_euler().z))
+			forward_sum += (-pose.basis.z.normalized()).dot(old.direction_to(pose.origin))
+			samples+=1
+	_check(no_air_steps and drive.balance.support_enabled and not lake.combat_snapshot().has(patch.heron_id),"lake heron flies and lands on the same active rig without ground steps in flight or a fall injury")
+	_check(extended>tucked+0.20 and springs>0.04,"live heron retracts and extends legs before contact and absorbs touchdown (%.2f/%.2f m leg height, %.2f m breast drop)"%[tucked,extended,springs])
+	_check(samples>45 and forward_sum/maxi(1,samples)>0.90 and peak_bank>0.012,"school banks and faces its measured world displacement across a real lake route")
 
 func _coast() -> WastelandSession:
 	var cfg: Dictionary = game._default_config()
@@ -124,6 +204,13 @@ func _advance(s: WastelandSession, step: float) -> void:
 
 func _joint(model: Node3D, label: String) -> Vector3:
 	return model.bones.global_transform * model.bones.get_bone_global_pose(model.bone_ids[label]).origin
+
+func _joint_rids(rig: Node3D) -> Array[RID]:
+	var result: Array[RID] = []
+	if rig != null:
+		for part in rig.get_children():
+			if part is RigidBody3D: result.append(part.get_rid())
+	return result
 
 func _clear_fish(s: WastelandSession, patch: WastelandLakeWildlife.Habitat) -> String:
 	for i in patch.fish_ids.size():

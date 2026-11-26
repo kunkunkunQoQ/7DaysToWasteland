@@ -4,7 +4,7 @@ extends Node3D
 const PhysicsRagdoll := preload("res://game/actors/physical_ragdoll.gd")
 const CORPSE_SECONDS := PhysicsRagdoll.CORPSE_SECONDS
 
-var physics := PhysicsRagdoll.new()
+var physics: PhysicsRagdoll
 var avatar := WastelandPartyAvatar.new()
 var appearance := {}
 var remaining := -1.0
@@ -29,19 +29,36 @@ static func spawn(world: Node3D, pose: Transform3D, outfit: String, gear: Dictio
 	body.avatar.set_offhand(offhand, false, false)
 	body.add_child(body.avatar)
 	body.avatar.pose(0.0, Vector2(velocity.x, velocity.z).length(), crouch, swimming)
-	body.add_child(body.physics)
 	var donor = source.active_motion if is_instance_valid(source) else null
-	if is_instance_valid(donor) and donor.center().distance_squared_to(body.avatar.to_global(Vector3.UP * 0.85)) > 2.25:
-		# An authoritative teleport can happen before the active rig receives its next motor targets.
-		donor = null
-	if not body.physics.begin(body.avatar, Vector3.ZERO if is_instance_valid(donor) else impact, at, bone):
-		body.queue_free()
-		return null
+	if is_instance_valid(source): source.set_seat_vehicle(null)
+	if is_instance_valid(donor) and source.outfit == outfit:
+		source.active_motion = null
+		donor.follow_relocation()
+		donor.restore_targets()
+		donor.rebind_avatar(body.avatar)
+		body.physics = donor.let_go(impact, at, bone)
+	else:
+		if is_instance_valid(donor): source.stop_live_motion()
+		var driver := WastelandActiveRagdoll.start(world,body.avatar,world.stream if world is WastelandSession else null)
+		if not driver:
+			body.queue_free()
+			return null
+		body.physics = driver.let_go(impact, at, bone)
 	if world is WastelandSession: body.physics.set_water_source(world.stream)
-	if is_instance_valid(donor):
-		body.physics.inherit_motion(donor)
-		body.push(impact, at, bone)
+	body.avatar.inherit_garment_motion(source)
 	return body
+
+func recover_into(person: WastelandPartyAvatar) -> void:
+	person.recover_from(avatar)
+	if physics is WastelandActiveRagdoll and person.outfit == avatar.outfit:
+		physics.watch_landing(false)
+		if is_instance_valid(person.active_motion): person.stop_live_motion()
+		person.active_motion = physics
+		person.active_motion.rebind_avatar(person)
+		person.active_motion.resume_driving()
+		person.active_motion.capture_targets()
+		physics = null
+	dismiss()
 
 func center() -> Vector3:
 	return physics.center()
@@ -77,5 +94,5 @@ func _physics_process(delta: float) -> void:
 func dismiss() -> void:
 	if is_queued_for_deletion(): return
 	hide()
-	if physics.is_inside_tree(): physics.release()
+	if is_instance_valid(physics) and physics.is_inside_tree(): physics.release()
 	queue_free()

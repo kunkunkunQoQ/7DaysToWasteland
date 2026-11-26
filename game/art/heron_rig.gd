@@ -79,13 +79,20 @@ func _wing_panel(part: Sculpt, side: int, rows: Array, color: Color) -> void:
 				part.triangle(ring[i],previous[j],ring[j],normal,tint)
 		previous = ring
 
-func pose(now: float, phase: float, airborne: float, flap_phase: float) -> void:
+func pose(now: float, phase: float, airborne: float, flap_phase: float, leg_tuck := -1.0, crouch := 0.0, flare := 0.0) -> void:
+	if leg_tuck < 0.0: leg_tuck = airborne
+	var ground_action := 1.0-maxf(airborne,crouch)
 	var strike := fposmod(now+phase+2.0,8.6)
-	var reach := smoothstep(0.0,0.23,strike)*(1.0-smoothstep(0.39,1.38,strike))*(1.0-airborne)
-	var scan := sin(now*0.72+phase)*(1.0-reach)*(1.0-airborne)
-	var step := smoothstep(2.9,3.4,strike)*(1.0-smoothstep(5.7,6.3,strike))*(1.0-airborne)
-	var beat := sin(flap_phase)
-	bend("Breast",-0.17*reach+airborne*(-0.14+beat*0.055),0,step*sin(now*3.0)*0.028)
+	var reach := smoothstep(0.0,0.23,strike)*(1.0-smoothstep(0.39,1.38,strike))*ground_action
+	var scan := sin(now*0.72+phase)*(1.0-reach)*ground_action
+	var step := smoothstep(2.9,3.4,strike)*(1.0-smoothstep(5.7,6.3,strike))*ground_action
+	var beat := lerpf(sin(flap_phase),0.36,flare)
+	var bend_angle := 0.49*crouch
+	# Shorten the two shanks symmetrically around the planted foot as the breast lowers.
+	var drop := 0.90*(1.0-cos(bend_angle))+0.174*sin(bend_angle)
+	bones.set_bone_pose_position(bone_ids.Breast,HIP-Vector3.UP*drop)
+	var breast_pitch := -0.17*reach+airborne*(-0.14+beat*0.055)+0.25*flare
+	bend("Breast",breast_pitch,0,step*sin(now*3.0)*0.028)
 	bend("NeckBase",-1.55*reach-0.61*airborne+0.05*scan,scan*0.16)
 	bend("NeckTip",-0.43*reach+0.98*airborne)
 	bend("Skull",0.88*reach-0.36*airborne,scan*0.23)
@@ -94,9 +101,9 @@ func pose(now: float, phase: float, airborne: float, flap_phase: float) -> void:
 		var stride := now*3.0+phase+(PI if side==1 else 0.0)
 		var swing := step*sin(stride)
 		var lift := step*maxf(0,cos(stride))
-		bend("Thigh"+suffix,-1.18*airborne+0.37*swing-0.30*lift+0.14*reach)
-		bend("Shin"+suffix,-0.32*airborne+0.74*lift)
-		bend("Foot"+suffix,-0.31*lift+0.88*airborne)
+		bend("Thigh"+suffix,-1.18*leg_tuck-bend_angle+0.37*swing-0.30*lift+0.14*reach+0.16*flare-breast_pitch*(1.0-leg_tuck))
+		bend("Shin"+suffix,-0.32*leg_tuck+2.0*bend_angle+0.74*lift)
+		bend("Foot"+suffix,-0.31*lift+0.88*leg_tuck-bend_angle-0.21*flare)
 		bend("Wing"+suffix,0,side*lerpf(-1.26,0.06,airborne),side*lerpf(-0.62,0.08+beat*0.95,airborne))
 		bend("Wrist"+suffix,0,side*lerpf(2.30,0.12+0.30*cos(flap_phase),airborne),side*airborne*(-0.13+0.48*sin(flap_phase-0.87)))
 	sync_head()

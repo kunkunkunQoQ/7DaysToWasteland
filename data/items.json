@@ -12,6 +12,7 @@
   "canvas_pack":{"name":"帆布挎包","kind":"armor","slot":"pack","pack_rows":1,"color":"#a78659","stack":1,"info":"穿到背包槽后可携带 36 格物品。卸下后超额物品仍可取出。"},
   "expedition_pack":{"name":"远行背囊","kind":"armor","slot":"pack","pack_rows":2,"color":"#547a6f","stack":1,"info":"穿到背包槽后可携带 45 格物品。背饰仍可单独穿戴。"},
   "meme_clock":{"name":"发条打卡钟","kind":"armor","slot":"back","color":"#d6b677","stack":1,"rating":1,"info":"背着一只哒哒响的打卡钟。远行准时返站的纪念品。"},
+  "meme_shawl":{"name":"哆嗦披肩","kind":"armor","slot":"back","color":"#9d879e","stack":1,"rating":1,"info":"披肩会念叨你刚刚做的事。附近的人能看见字幕，听见它把几个音节翻来覆去地说。"},
   "dispatch_parcel":{"name":"远行货包","kind":"quest","color":"#af855b","stack":1,"info":"在发单驻地交还，可结清今日远行单。"},
   "meme_shades": {"name":"夜班墨镜","kind":"armor","color":"#497f8d","stack":1,"rating":4,"info":"镜片削减 8% 热暴露。","heat_resist":0.08,"slot":"eyes"},
   "meme_whiskers": {"name":"小猫胡须","kind":"armor","color":"#eabeb6","stack":1,"rating":4,"info":"一碰就颤的奶白胡须，可和眼镜、耳朵一起戴。","slot":"muzzle"},

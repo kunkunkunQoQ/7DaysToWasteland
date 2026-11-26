@@ -30,7 +30,7 @@ func run() -> void:
 				break
 			seen[cursor]=true
 			cursor=ids[cursor].parent
-	check(valid and ids.size()==61 and targets.size()==13,"61 distinct acyclic achievements, 13 unique existing secret rewards")
+	check(valid and ids.size()==62 and targets.size()==14,"62 distinct acyclic achievements, 14 unique existing secret rewards")
 	await close_world()
 	open_world({})
 	session.options.storage_path=WastelandSave.root_override+"/bindings.cfg"

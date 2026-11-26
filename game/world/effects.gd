@@ -288,6 +288,7 @@ func _notify_pickup(received: Dictionary, remaining: Dictionary, buoy: bool) -> 
 	var words := "背包已满"
 	if not received.is_empty():
 		words = ("已打捞 " if buoy else "已拾取 ") + _item_summary(received, 4 if remaining.is_empty() else 2)
+		session.record_shawl_action(("打捞到了" if buoy else "捡起了") + _item_summary(received, 1))
 	if not remaining.is_empty():
 		words += ("，浮标内剩余 " if buoy else "，地上剩余 ") + _item_summary(remaining, 2)
 	session.notify(words)

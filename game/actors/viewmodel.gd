@@ -364,9 +364,10 @@ func recoil(show_flash: bool) -> void:
 	if model_id=="field_crossbow": set_loaded_arrow(false)
 	flash = 0.063 if show_flash else 0.0
 
-func animate(delta: float, pace: float, duck: float, light: float, hit_stop: float) -> void:
+func animate(delta: float, pace: float, duck: float, light: float, hit_stop: float, walk_phase := -1.0) -> void:
 	var f := maxf(0.0,delta-hit_stop)
-	pose_time += f * (1.6 + pace * 2.15)
+	if walk_phase >= 0.0: pose_time = walk_phase * TAU
+	else: pose_time += f * (1.6 + pace * 2.15)
 	breath_phase = fmod(breath_phase+f*(1.63+pace*0.20),TAU)
 	stroke_phase = fmod(stroke_phase+f*(2.1+minf(pace,1.4)*1.5),TAU)
 	kick = move_toward(kick, 0.0, f * 7.0)

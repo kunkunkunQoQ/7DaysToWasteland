@@ -6,7 +6,7 @@ const LOOKS := [
 	{"head":"meme_ears","eyes":"meme_shades","muzzle":"meme_whiskers","hands":"meme_claws","back":"meme_tail"},
 	{"head":"meme_traffic","body":"meme_duck","feet":"meme_fins"},
 	{"head":"meme_pot","body":"meme_alien"},
-	{"head":"meme_antenna","back":"meme_tail","hands":"meme_claws"}]
+	{"head":"meme_antenna","back":"meme_shawl","hands":"meme_claws"}]
 func _initialize()->void: run.call_deferred()
 
 func check(ok:bool,msg:String)->void:
@@ -30,7 +30,7 @@ func run()->void:
 		unique[mesh]=true
 		hands.hold(id,item)
 		check(hands.model.get_child_count()>=2 and hands.model_id==id,"first person holds "+id)
-	check(unique.size()==12,"twelve items")
+	check(unique.size()==14,"fourteen costume items")
 	hands.hide()
 	root.size=Vector2i(1620,930)
 	root.content_scale_mode=Window.CONTENT_SCALE_MODE_DISABLED

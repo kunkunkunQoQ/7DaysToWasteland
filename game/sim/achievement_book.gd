@@ -2,6 +2,7 @@ extends RefCounted
 
 const LAND := ["meadow","taiga","alpine","desert","mesa","marsh","canyon"]
 const CAT_OUTFIT := ["meme_ears","meme_whiskers","meme_tail","meme_claws"]
+const CHAT_WINDOW_MS := 60000
 static var ANIMALS: Array = WastelandHordes.WILDLIFE + ["heron","lake_fish","pond_turtle","crayfish"]
 var entries: Array = []
 var by_id := {}
@@ -9,6 +10,7 @@ var session: Node
 var caption := ""
 var caption_until := 0
 var next_check := 0.0
+var recent_chat: Array[Dictionary] = []
 
 func configure(world: Node) -> void:
 	session=world
@@ -39,7 +41,7 @@ func _metric(key: String) -> int:
 		"relics":
 			var total:=0
 			for row: Dictionary in entries:
-				if row.reward!="" and row.reward!="meme_clock" and p.records.has("owned_"+str(row.reward)): total+=1
+				if row.reward not in ["","meme_clock","meme_shawl"] and p.records.has("owned_"+str(row.reward)): total+=1
 			return total
 	return int(p.records.get(key,0))
 
@@ -61,6 +63,31 @@ func mark(key: String, value := 1.0) -> void:
 
 func acquired_item(id: String) -> void:
 	if id.begins_with("meme_"): mark("owned_"+id)
+
+func record_chat(speaker: String, text: String, now_ms := Time.get_ticks_msec()) -> void:
+	if session == null or session.replica or not by_id.has("shiver_chat"): return
+	var claimed := "shiver_chat_awarded_" + speaker
+	if session.progress.records.has(claimed) or text.is_empty(): return
+	var distinct := 1
+	for index in range(recent_chat.size()-1,-1,-1):
+		var line := recent_chat[index]
+		if now_ms-int(line.at) > CHAT_WINDOW_MS or (line.speaker == speaker and line.text == text):
+			recent_chat.remove_at(index)
+		elif line.speaker == speaker:
+			distinct += 1
+	var row: Dictionary = by_id.shiver_chat
+	mark(row.metric,distinct)
+	if distinct < int(row.target):
+		recent_chat.append({"speaker":speaker,"text":text,"at":now_ms})
+		return
+	# The achievement belongs to the world. Each speaker earns their own copy.
+	session.progress.records[claimed] = 1
+	if not unlocked(row.id):
+		session.progress.achieved[row.id] = session.clock.day()
+		_announce_unlocks([row.id])
+	session.award({row.reward:1},session.player.global_position)
+	session.notify("已获得 " + session.catalog.title(row.reward))
+	session._schedule_world_save()
 
 func tick(delta: float) -> void:
 	next_check-=delta
@@ -88,6 +115,9 @@ func refresh() -> void:
 		if reward!="":
 			session.award({reward:1},session.player.global_position)
 		earned.append(row.id)
+	_announce_unlocks(earned)
+
+func _announce_unlocks(earned: Array) -> void:
 	announce(earned)
 	if not earned.is_empty() and session.slot>0:
 		preload("res://game/core/atlas_unlocks.gd").remember(WastelandSave.save_root(),earned)

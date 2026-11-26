@@ -317,9 +317,10 @@ func _begin(finger:int,pos:Vector2)->void:
 	for id:String in layout:
 		if not layout[id].has_point(pos): continue
 		if not "pad" in fingers.values(): pad_release_ms=-1000
-		if MENU.has(id) or id=="pause_game":
+		if MENU.has(id) or id in ["pause_game","chat"]:
 			release_all()
 			if id=="pause_game": game._pause()
+			elif id=="chat": game.open_chat()
 			else: game.open_panel(MENU[id])
 		elif id=="discard":
 			fingers[finger]="discard_tap"

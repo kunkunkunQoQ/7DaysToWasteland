@@ -43,6 +43,9 @@ static func support(a: WastelandCreature) -> void:
 				target.y += 0.115*scale_y
 			if not a.biting() and (a.type == "crawler" or i == (0 if a.limb_damage.y > 0 else 1)):
 				target += Vector3(0,a.windup*0.15+a.attack*0.08,-a.attack*0.21)*scale_y
+			if severity == 0:
+				var reaching := a.windup > 0.03 or a.attack > 0.03
+				target = a.foot_contacts.target(i, a.global_transform, target, not reaching and (cycle < stance or moving < 0.01), 1.0 if reaching else swing, 0.24 * scale_y)
 			target.y = _surface_y(target,normal)
 			_reach(a,"arm"+suffix,"elbow"+suffix,"hand"+suffix,target,Vector3(side*0.82,0.30,0.95),0.55 if severity == 2 else 1.0)
 			if severity == 0:
@@ -70,6 +73,7 @@ static func support(a: WastelandCreature) -> void:
 			var height := 0.096+running*0.10+(0.07 if a.motion_water else 0.0)
 			var target := Vector3(hip_x+side*0.013,sole_y+lift*height,side*0.016)*a.rig.scale
 			target.z += along*step
+			target = a.foot_contacts.target(i, a.global_transform, target, cycle < stance or moving < 0.01, swing, 0.30 * scale_y)
 			target.y = _surface_y(target,normal)
 			_reach(a,"leg"+suffix,"knee"+suffix,"ankle"+suffix,target,Vector3(side*0.10,0,-1))
 			_level_tip(a,"ankle"+suffix,pitch)

@@ -14,6 +14,9 @@ var interface_root := Control.new()
 var ui_paint := ShaderMaterial.new()
 var pixel_paint := ShaderMaterial.new()
 var hud := WastelandHUD.new()
+var chat := preload("res://game/ui/chat_bar.gd").new()
+var touch_controls: TouchControls
+var shawl_subtitles := VBoxContainer.new()
 var front := WastelandFront.new()
 var panels := WastelandPanels.new()
 var session: WastelandSession
@@ -91,14 +94,24 @@ func _ready() -> void:
 	interface_root.add_child(hud)
 	hud.hide()
 	if TouchControls.supported():
-		var touch_controls := TouchControls.new()
+		touch_controls = TouchControls.new()
 		touch_controls.name = "TouchControls"
 		touch_controls.setup(self)
 		hud.add_child(touch_controls)
+	hud.add_child(chat)
+	chat.submitted.connect(func(words: String): session.send_chat(words))
+	chat.dismissed.connect(close_overlay)
 	front.game = self
 	interface_root.add_child(front)
 	panels.game = self
 	interface_root.add_child(panels)
+	interface_root.add_child(shawl_subtitles)
+	shawl_subtitles.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	shawl_subtitles.alignment = BoxContainer.ALIGNMENT_END
+	shawl_subtitles.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	shawl_subtitles.offset_top = -94
+	shawl_subtitles.offset_bottom = -94
+	shawl_subtitles.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	get_viewport().size_changed.connect(resize_scene)
 	resize_scene(true)
 	boot_args = OS.get_cmdline_user_args()
@@ -237,6 +250,10 @@ func _show_title() -> void:
 	front.title()
 
 func _remove_session() -> void:
+	chat.reset()
+	for subtitle in shawl_subtitles.get_children():
+		shawl_subtitles.remove_child(subtitle)
+		subtitle.queue_free()
 	pixel_paint.set_shader_parameter("underwater", false)
 	water_light_band = -1
 	for instance in hands_camera.get_children():
@@ -305,6 +322,8 @@ func _enter_world(config: Dictionary, snapshot: Dictionary, slot: int, save_init
 	hands_view.render_target_update_mode=SubViewport.UPDATE_ALWAYS
 	pixel_paint.set_shader_parameter("hands_visible",true)
 	session.message.connect(_notify)
+	session.chat_received.connect(chat.receive)
+	session.shawl_spoke.connect(_shawl_subtitle)
 	session.panel.connect(open_panel)
 	session.failed.connect(_failure)
 	hud.tracked_marker_id = -1
@@ -327,14 +346,25 @@ func close_overlay() -> void:
 	if session == null or session.preview_only:
 		return
 	_close_chest()
+	chat.close_input()
 	front.hide()
 	panels.hide()
 	hud.show()
+	if touch_controls != null: touch_controls.show()
 	show_depth_of_field(0)
 	session.controls_enabled = true
 	session.simulation_paused = false
 	if not is_headless:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if TouchControls.supported() else Input.MOUSE_MODE_CAPTURED
+
+func open_chat() -> void:
+	if not is_instance_valid(session) or not session.controls_enabled or session.death_screen or not hud.visible:
+		return
+	session.controls_enabled = false
+	session.reset_forward_taps()
+	if touch_controls != null: touch_controls.hide()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	chat.open_input()
 
 func leave_world() -> void:
 	if is_instance_valid(session) and not session.preview_only and session.slot > 0:
@@ -352,6 +382,7 @@ func open_panel(id: String, context: Variant = null) -> void:
 	if id == "":
 		close_overlay()
 		return
+	if chat.editing: chat.close_input()
 	if id!="chest": _close_chest()
 	session.controls_enabled = false
 	session.simulation_paused = false
@@ -367,6 +398,7 @@ func _close_chest() -> void:
 		session.replica_chest={}
 
 func _pause() -> void:
+	if chat.editing: chat.close_input()
 	session.controls_enabled = false
 	session.simulation_paused = not network.active()
 	hud.hide()
@@ -375,6 +407,7 @@ func _pause() -> void:
 	front.pause()
 
 func _failure() -> void:
+	chat.close_input()
 	_close_chest()
 	hud.hide()
 	panels.hide()
@@ -386,7 +419,28 @@ func _notify(words: String, duration: float) -> void:
 	if panels.visible:
 		panels.update_status(words,duration)
 
+func _shawl_subtitle(words: String) -> void:
+	if shawl_subtitles.get_child_count() >= 3:
+		var oldest := shawl_subtitles.get_child(0)
+		shawl_subtitles.remove_child(oldest)
+		oldest.queue_free()
+	var line := WastelandUIStyle.label(words, 17, Color("#f7dfae"))
+	line.add_theme_font_override("font", WastelandUIStyle.FONT)
+	line.add_theme_constant_override("outline_size", 6)
+	line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	shawl_subtitles.add_child(line)
+	var fade := line.create_tween()
+	fade.tween_interval(3.2)
+	fade.tween_property(line, "modulate:a", 0.0, 0.3)
+	fade.tween_callback(line.queue_free)
+
 func _input(event: InputEvent) -> void:
+	if chat.editing:
+		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+			close_overlay()
+			get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseMotion:
 		if is_instance_valid(session) and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			# The world SubViewport is displayed by a TextureRect. Mouse events belong to this window.
@@ -397,6 +451,10 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_echo() or session == null:
+		return
+	if hud.visible and session.controls_enabled and event.is_action_pressed("chat"):
+		open_chat()
+		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and not front.visible and not panels.visible and not get_viewport().gui_get_focus_owner() is LineEdit:
 		session.forward_key(event)
@@ -444,7 +502,9 @@ func _notification(what: int) -> void:
 func _handle_back() -> void:
 	if closing or load_in_progress or not is_instance_valid(session):
 		return
-	if front.visible:
+	if chat.editing:
+		close_overlay()
+	elif front.visible:
 		front.handle_back()
 	elif panels.visible and panels.active=="sources":
 		panels.return_from_sources()

@@ -52,7 +52,11 @@ static func mesh(id: String, definition: Dictionary) -> ArrayMesh:
 			"armor": _garment(id,tint,parts)
 			"quest": _journal(parts)
 			_: _material(id,tint,parts,shape)
-	var result := WastelandLook.mesh_parts(parts,0.12) if not parts.is_empty() else null
+	var result: ArrayMesh
+	if kind == "armor":
+		result = _garment_parts(parts, shape)
+	elif not parts.is_empty():
+		result = WastelandLook.mesh_parts(parts, 0.12)
 	if shape.triangle_count>0:
 		var sculpture:=shape.commit()
 		if result==null:
@@ -302,6 +306,44 @@ static func _garment(id:String,tint:Color,parts:Array) -> void:
 		_box(parts,Vector3(side*0.233,0.009,0.013),Vector3(0.122,0.278,0.129),tint,Vector3.BACK,side*0.30,0.90)
 		_box(parts,Vector3(side*0.111,0.026,-0.075),Vector3(0.109,0.205,0.052),tint.lightened(0.21 if id=="armor" else 0.07))
 	_box(parts,Vector3(0,0.003,-0.09),Vector3(0.014,0.315,0.022),BRASS)
+
+static func _garment_parts(parts: Array, shape: WastelandScenery) -> ArrayMesh:
+	const RIM := [Vector2(-0.38,-0.5), Vector2(0.38,-0.5), Vector2(0.5,-0.38), Vector2(0.5,0.38),
+		Vector2(0.38,0.5), Vector2(-0.38,0.5), Vector2(-0.5,0.38), Vector2(-0.5,-0.38)]
+	var boxes: Array = []
+	for part: Array in parts:
+		var size: Vector3 = part[1]
+		var thin_axis := size.min_axis_index()
+		# Laces and zip fasteners are only a few millimetres across. Tapered
+		# garment blocks already have a complete twelve-triangle silhouette.
+		if part[4] != 1.0 or size[thin_axis] <= 0.018:
+			boxes.append(part)
+			continue
+		var center: Vector3 = part[0]
+		var rotation: Basis = part[3]
+		var color: Color = part[2]
+		var previous := PackedVector3Array()
+		for depth: float in [-0.5, 0.0, 0.5]:
+			var ring := PackedVector3Array()
+			var inset := 1.0 if depth == 0.0 else 0.96
+			for corner: Vector2 in RIM:
+				var point := Vector3.ZERO
+				point[thin_axis] = depth
+				point[(thin_axis+1)%3] = corner.x * inset
+				point[(thin_axis+2)%3] = corner.y * inset
+				ring.append(center + rotation * (point * size))
+			if depth != 0.0:
+				var cap_normal := rotation[thin_axis] * signf(depth)
+				for i in range(1, ring.size()-1):
+					shape.triangle(ring[0],ring[i],ring[i+1],cap_normal,color)
+			if not previous.is_empty():
+				for i in ring.size():
+					var next := (i+1) % ring.size()
+					var outward := ((ring[i]+ring[next]+previous[i]+previous[next])*0.25-center).normalized()
+					shape.triangle(previous[i],previous[next],ring[i],outward,color)
+					shape.triangle(ring[i],previous[next],ring[next],outward,color)
+			previous = ring
+	return WastelandLook.mesh_parts(boxes) if not boxes.is_empty() else null
 
 static func _journal(parts:Array) -> void:
 	_box(parts,Vector3.ZERO,Vector3(0.332,0.397,0.069),INK,Vector3.BACK,0.11)
@@ -570,13 +612,14 @@ static func _field_item(id:String,parts:Array,shape:WastelandScenery)->bool:
 			_field_bolt(shape,steel)
 		"hardhat":
 			var amber:=Color("#dba042")
+			const SHELL_SIDES := 16
 			var profile:=[Vector3(-0.066,0.203,0.216),Vector3(-0.059,0.235,0.270),Vector3(-0.044,0.236,0.266),Vector3(-0.029,0.205,0.209),Vector3(0.035,0.200,0.208),Vector3(0.09,0.177,0.189),Vector3(0.135,0.131,0.142),Vector3(0.156,0.051,0.076),Vector3(0.161,0.003,0.003)]
 			for j in profile.size()-1:
 				var row:Vector3=profile[j]
 				var next:Vector3=profile[j+1]
-				for i in 20:
-					var a:=TAU*i/20
-					var b:=TAU*(i+1)/20
+				for i in SHELL_SIDES:
+					var a:=TAU*i/SHELL_SIDES
+					var b:=TAU*(i+1)/SHELL_SIDES
 					var p:=Vector3(cos(a)*row.y,row.x,sin(a)*row.z)
 					var q:=Vector3(cos(b)*row.y,row.x,sin(b)*row.z)
 					var r:=Vector3(cos(a)*next.y,next.x,sin(a)*next.z)
@@ -595,13 +638,13 @@ static func _field_item(id:String,parts:Array,shape:WastelandScenery)->bool:
 					shape.lobe(Vector3(x,-0.005,0),Vector3(0.086,0.108,0.040),LEATHER,0,true)
 					_box(parts,Vector3(x,-0.105,0),Vector3(0.15,0.073,0.069),LINEN)
 					for i in 4:
-						_shaft(shape,Vector3(x-0.059+i*0.039,0.045,0),Vector3(x-0.064+i*0.041,0.155+0.037*sin(i*PI/3),-0.01),0.020,0.015,SAND,8)
-					_shaft(shape,Vector3(x+side*0.056,0.004,0),Vector3(x+side*0.107,0.087,-0.014),0.030,0.015,SAND,8)
+						shape.tube([Vector3(x-0.059+i*0.039,0.045,0),Vector3(x-0.064+i*0.041,0.155+0.037*sin(i*PI/3),-0.01)],[0.020,0.015],6,SAND,0.24)
+					shape.tube([Vector3(x+side*0.056,0.004,0),Vector3(x+side*0.107,0.087,-0.014)],[0.030,0.015],6,SAND,0.24)
 				else:
 					var z:=side*0.062
 					shape.lobe(Vector3(x,-0.058,z-0.05),Vector3(0.093,0.088,0.17),LEATHER,0,true)
 					_box(parts,Vector3(x,-0.12,z-0.052),Vector3(0.18,0.035,0.308),INK)
-					_shaft(shape,Vector3(x,-0.027,z+0.027),Vector3(x,0.152,z+0.027),0.083,0.084,WOOD,10)
+					shape.tube([Vector3(x,-0.027,z+0.027),Vector3(x,0.152,z+0.027)],[0.083,0.084],8,WOOD,0.24)
 					for j in 3: _box(parts,Vector3(x,0.019+0.035*j,z-0.052),Vector3(0.114,0.011,0.012),LINEN,Vector3.BACK,0.13*side)
 		"oilskin_vest":
 			var wax:=Color("#86905a")

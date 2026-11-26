@@ -2,12 +2,16 @@ class_name WastelandSession
 extends Node3D
 
 signal message(text: String, duration: float)
+signal shawl_spoke(words: String)
+signal chat_received(sender: String, text: String)
 signal panel(id: String, context: Variant)
 signal failed
 signal stored(slot: int)
 
 const WORLD_SAVE_INTERVAL_MS := 30000
+const CHAT_LENGTH := 160
 const QUICK_SAVE_DELAY_MS := 5000
+const SHAWL_COOLDOWN_MS := 5000
 const BOAT_REPAIR := {"wood":6, "fiber":3, "scrap":2}
 const TRADE_COST := {"scrap":8}
 const TRADE_REWARD := {"clean_water":2,"canned":2,"bandage":1}
@@ -273,6 +277,7 @@ func configure(config: Dictionary, snapshot: Dictionary, slot_number: int, data:
 		player.ride(vehicles[snapshot.mounted])
 	if player.health <= 0.0:
 		respawn()
+	player.update_live_avatar(0.0)
 	PartyFalls.restore_corpses(self,snapshot.get("survivor_corpses",[]))
 
 func start_position() -> Vector3:
@@ -1051,6 +1056,7 @@ func _draw_water(at:Vector3,filtered:bool)->bool:
 		notify("背包已满，腾出空间后再取水")
 		return false
 	audio.play_at("splash",at,0.53)
+	record_shawl_action("滤出了一份净水" if filtered else "打了一份生水")
 	if filtered:
 		player.hand.swing_attack(0.45)
 		achievements.add("pump_water")
@@ -1071,6 +1077,7 @@ func draw_filtered_batch(at:Vector3, servings:int)->bool:
 	achievements.add("pump_water")
 	achievements.add("got_safe_water",servings)
 	audio.play_at("splash",at,0.66)
+	record_shawl_action("滤出了%d份净水" % servings)
 	notify("复合滤芯已用完 · 净水 ×%d"%servings)
 	return true
 
@@ -1083,6 +1090,7 @@ func _record_observation(id: String, species_name: String, morph: String = "") -
 	gain(xp, detail)
 	progress.records[key] = 1
 	preload("res://game/sim/nature_journal.gd").observe(self,id,morph)
+	record_shawl_action("观察到了" + species_name)
 	var words := "观察到%s · 已记入地图  +%d 经验" % [species_name, xp]
 	notify(words, 4.0)
 	if is_instance_valid(network):
@@ -1351,6 +1359,7 @@ func _harvest(body: StaticBody3D, amount: float, tool: int, impact: Vector3, pic
 			notify("这里的松散材料已取走，余下部分需要工具",1.5)
 			return
 		harvest.hand_picked[id] = true
+		record_shawl_action("敲落了松石")
 		var loose: Dictionary = LOOSE_MATERIALS[kind]
 		drop_materials(impact,loose,(player.eyes.global_position-impact).normalized())
 		gain(3,"gather",3)
@@ -1406,10 +1415,13 @@ func _harvest(body: StaticBody3D, amount: float, tool: int, impact: Vector3, pic
 		loot[key] = maxi(1, roundi(float(row[2][key]) * bonus * (1.0 + progress.rank("harvest") * 0.18)))
 	if trunk:
 		timber.fell(body, cut, loot)
+		record_shawl_action("砍倒了" + str(timber.NAMES.get(cut.model,row[0])))
 	elif picked_up:
 		award(loot, impact)
+		record_shawl_action("捡起了" + str(row[0]))
 	else:
 		drop_materials(impact,loot,(player.eyes.global_position-impact).normalized())
+		record_shawl_action("采集了" + str(row[0]))
 	gain(2 if kind in LOOSE_SCENERY else 25 if tree else 20, "wood" if loot.has("wood") else "gather", int(loot.get("wood",1)))
 	if kind in PICKUPS and not progress.records.has("gather_"+kind):
 		gain(1,"gather_"+kind)
@@ -1579,6 +1591,7 @@ func _strike_creature(hit:Dictionary, amount:float, source:Node3D, heavy:bool, m
 	if is_instance_valid(shooter):
 		if melee: actor.hit_pause=0.045
 		_confirm_hit(shooter,zone=="head",melee)
+		record_shawl_action(("击败了" if actor.hp <= 0.0 else "击中了") + actor.display_name(), shooter)
 
 func _confirm_hit(shooter: WastelandSurvivor, head: bool, melee: bool) -> void:
 	shooter.confirmed_hit += 1
@@ -1588,7 +1601,9 @@ func _confirm_hit(shooter: WastelandSurvivor, head: bool, melee: bool) -> void:
 
 func _strike_lake_wildlife(hit: Dictionary, amount: float, source: Node3D, origin: Vector3, heavy: bool, melee: bool) -> bool:
 	if not stream.lake_wildlife.strike(hit,amount,origin,heavy): return false
-	if source is WastelandSurvivor: _confirm_hit(source,false,melee)
+	if source is WastelandSurvivor:
+		_confirm_hit(source,false,melee)
+		record_shawl_action("击中了水域猎物", source)
 	audio.play_at("hit",hit.position,0.50)
 	return true
 
@@ -1712,6 +1727,7 @@ func collect_station(cell: Vector3i) -> void:
 				achievements.add("got_safe_water",collected)
 		if bag.current()=="potato" and construction.blocks[cell].device=="campfire": achievements.mark("potato_chef")
 		gain(10 * mini(moved, 5), "craft")
+		record_shawl_action("从%s取出了%d份成品" % [catalog.title(construction.blocks[cell].device), moved])
 		notify("已取出成品 ×%d" % moved)
 	else:
 		notify("还没有成品" if output.is_empty() else "背包已满")
@@ -1722,6 +1738,7 @@ func _finish_crafting() -> void:
 		_schedule_world_save()
 		award({job.id:int(job.amount)}, player.global_position)
 		achievements.add("made_"+str(job.id),int(job.amount))
+		record_shawl_action("做出了" + catalog.title(job.id))
 		gain(11, "craft")
 		notify("制作完成 · %s ×%d" % [catalog.title(job.id), int(job.amount)])
 
@@ -1968,6 +1985,7 @@ func collect_dispatch(cell:Vector2i) -> void:
 		notify("背包已满")
 		return
 	record.signed=true
+	record_shawl_action("签收了远行货包")
 	record.same_courier=record.courier==_courier_id() and WastelandSite.board_at(record.origin).distance_to(depot)>=320.0
 	notify("已签收货包 · 今日返回发单公告板交货")
 
@@ -2018,6 +2036,43 @@ func award(items: Dictionary, at: Vector3) -> void:
 	bag.transfer(remainder)
 	if not remainder.is_empty():
 		spawn_drop(at, remainder)
+
+# Projectiles can land while the host is simulating someone else's controls.
+func record_shawl_action(words: String, performer: WastelandSurvivor = null) -> void:
+	if performer == null: performer = player
+	if replica or not is_instance_valid(performer) or performer.health <= 0.0: return
+	performer.shawl_last_action = words
+	if performer.carried_bag == null or performer.carried_bag.gear.get("back", "") != "meme_shawl": return
+	# Repeating the same action can speak again after a longer quiet interval,
+	# but only a fresh action can trigger that repeat.
+	performer.shawl_pending = words != performer.shawl_last_spoken or Time.get_ticks_msec() >= performer.shawl_voice_after_ms + SHAWL_COOLDOWN_MS
+	if performer.shawl_pending: tick_shawl(performer)
+
+func _toggle_gear(id: String) -> void:
+	bag.toggle_gear(id)
+	if id == "meme_shawl" and bag.gear.get("back", "") == id:
+		if player.shawl_last_action.is_empty(): player.shawl_last_action = "披上了哆嗦披肩"
+		player.shawl_pending = true
+		tick_shawl(player)
+
+func tick_shawl(performer: WastelandSurvivor) -> void:
+	if not performer.shawl_pending: return
+	if replica or performer.health <= 0.0 or performer.carried_bag.gear.get("back", "") != "meme_shawl":
+		performer.shawl_pending = false
+		return
+	var now := Time.get_ticks_msec()
+	if now < performer.shawl_voice_after_ms: return
+	performer.shawl_pending = false
+	performer.shawl_voice_after_ms = now + SHAWL_COOLDOWN_MS
+	performer.shawl_last_spoken = performer.shawl_last_action
+	if is_instance_valid(network) and network.server():
+		network.broadcast_shawl(performer, performer.shawl_last_spoken)
+	else:
+		show_shawl_caption("你", performer.shawl_last_spoken, performer.global_position)
+
+func show_shawl_caption(speaker_name: String, action_text: String, at: Vector3) -> void:
+	shawl_spoke.emit("哆嗦披肩　%s刚才%s" % [speaker_name, action_text])
+	audio.play_shawl_voice(at)
 
 func discard_protected(id:String)->bool:
 	return bag.available_count(id)==1 and (bag.is_worn(id) or bag.current()==id or bag.offhand==id)
@@ -2300,6 +2355,19 @@ func save_now(report: bool) -> Error:
 		if report: notify("保存失败 · 错误 %d" % error)
 	return error
 
+func send_chat(text: String) -> void:
+	if preview_only or not is_instance_valid(player): return
+	var line := text.strip_escapes().replace("　"," ").strip_edges().left(CHAT_LENGTH).strip_edges()
+	if line.is_empty(): return
+	if replica:
+		network.send_request("chat",[line])
+		return
+	var sender: String = network.active_member.nickname if remote_actor else options.player_name
+	if is_instance_valid(network) and network.server():
+		network.broadcast_chat(sender,line)
+	chat_received.emit(sender,line)
+	achievements.record_chat(_courier_id(),line)
+
 func notify(text: String, duration: float = 2.5) -> void:
 	if remote_actor:
 		network.tell(text,duration)
@@ -2339,7 +2407,7 @@ func apply_ui_command(id: String, args: Array) -> void:
 			var item_id:String=args[0]
 			match catalog.items.get(item_id,{}).get("kind",""):
 				"armor":
-					if not bag.is_worn(item_id): bag.toggle_gear(item_id)
+					if not bag.is_worn(item_id): _toggle_gear(item_id)
 				"weapon","ranged","tool","field_gear","light","sapling":
 					if bag.offhand==item_id and bag.available_count(item_id)==1: bag.swap_hands()
 					else: bag.assign(item_id,bag.active)
@@ -2350,7 +2418,7 @@ func apply_ui_command(id: String, args: Array) -> void:
 			if args.size()!=1 or not args[0] is String or bag.count(args[0])<=0:
 				return
 			if catalog.items.get(args[0],{}).get("kind","")=="armor":
-				bag.toggle_gear(args[0])
+				_toggle_gear(args[0])
 				notify(("已穿戴 " if args[0] in bag.gear.values() else "已脱下 ") + catalog.title(args[0]))
 			else:
 				player.consume(args[0])

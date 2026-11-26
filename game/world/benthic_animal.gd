@@ -14,6 +14,8 @@ var stroke := 0.0
 var alert := 0.0
 var evade := Vector2.ZERO
 var active_pose := false
+var travel_speed := 0.0
+var tail_flick := 0.0
 
 func build(id: String, form: String, face := 0, preview := false) -> void:
 	species = id
@@ -117,13 +119,30 @@ func advance(stream: WastelandStream, observer: Vector3, now: float, delta: floa
 	var radius := 1.38 if turtle else 0.71
 	var next := anchor+Vector3(sin(cycle)*radius+evade.x,0,cos(cycle)*radius*0.67+evade.y)
 	var bed := stream.ground_at(next)
-	next.y = clampf(bed+1.20+sin(cycle*1.7)*0.28-alert*0.49,bed+0.30,-0.38) if turtle else bed+0.024
-	var heading := Vector2(cos(cycle),-sin(cycle)*0.67).normalized()
+	next.y = clampf(bed+1.20+sin(cycle*1.7)*0.28-alert*0.49,bed+0.30,-0.38) if turtle else bed+0.005
+	var velocity := Vector3(cos(cycle),0,-sin(cycle)*0.67)*radius*(0.25 if turtle else 0.17)
+	var tracking := active_pose and delta>0.0 and next.distance_to(position)<delta*4.0+0.13
+	if tracking: velocity = (next-position)/delta
+	travel_speed = velocity.length()
+	var heading := Vector2(velocity.x,velocity.z)
+	var backwards := not turtle and alert>0.35 and travel_speed>0.24 and heading.dot(separation)>0.0
+	if backwards: heading = -heading
+	var current_yaw := atan2(basis.z.x,basis.z.z)
+	var target_yaw := atan2(-heading.x,-heading.y) if heading.length_squared()>0.0001 else current_yaw
+	var yaw := rotate_toward(current_yaw,target_yaw,delta*(4.2 if turtle else 7.3)) if tracking else target_yaw
+	var forward := Vector3(-sin(yaw),0,-cos(yaw))
 	if turtle:
-		heading = (heading+evade*1.5).normalized()
-	elif alert>0.35:
-		heading = -separation.normalized()
-	rotation.y = lerp_angle(rotation.y,atan2(-heading.x,-heading.y),1.0 if not active_pose else minf(1,delta*3.5))
+		var pitch := clampf(atan2(velocity.y,maxf(0.03,heading.length())),-0.34,0.34)
+		var bank := 0.0
+		if tracking:
+			var response := 1.0-exp(-delta*6.0)
+			pitch = lerpf(rotation.x,pitch,response)
+			bank = lerpf(rotation.z,clampf(angle_difference(current_yaw,yaw)*travel_speed*0.16/delta,-0.28,0.28),response)
+		basis = Basis.from_euler(Vector3(pitch,yaw,bank))
+	else:
+		var normal := stream.ground_normal_at(next)
+		if tracking: normal = basis.y.normalized().slerp(normal,1.0-exp(-delta*13.0))
+		basis = Basis.looking_at(forward.slide(normal).normalized(),normal)
 	position = next
 	active_pose = true
 	animate(now,delta)
@@ -135,9 +154,13 @@ func _process(delta: float) -> void:
 	animate(preview_time,delta)
 
 func animate(now: float, delta: float) -> void:
-	stroke = fmod(stroke+delta*(2.8+alert*3.0),TAU)
+	var turtle := species == "pond_turtle"
+	var cadence := 2.8+alert*3.0 if previewing else minf(travel_speed*(7.8 if turtle else 48.0),10.5 if turtle else 15.0)
+	stroke = fmod(stroke+delta*cadence,TAU)
 	if species == "pond_turtle":
 		var glide := maxf(alert,1.0-smoothstep(0.25,0.80,sin(now*0.90+phase)))
+		if not previewing:
+			glide = smoothstep(0.025,0.32,travel_speed)*maxf(glide,smoothstep(0.27,0.70,travel_speed))
 		bend("Shell",-0.12*alert,0,0.05*sin(stroke+phase)*glide)
 		bones.set_bone_pose_position(bone_ids.Neck,TURTLE_NECK+Vector3(0,-0.018,0.085)*alert)
 		bend("Neck",0.14*sin(now*0.85+phase)-0.22*alert,0.25*sin(now*0.47+phase))
@@ -150,11 +173,12 @@ func animate(now: float, delta: float) -> void:
 				bend("Arm"+suffix,0,side*lerpf(-0.38,sin(beat)*(0.72 if rear==0 else 0.56),glide),side*(0.05+glide*0.24*cos(beat)))
 				bend("Paddle"+suffix,glide*cos(beat-0.4)*0.41,side*(0.16+glide*0.47*sin(beat-0.92)),side*glide*0.28*cos(beat-0.85))
 	else:
-		var tuck := alert*maxf(0.0,cos(stroke+phase))
-		bones.set_bone_pose_position(bone_ids.Carapace,Vector3.UP*tuck*0.10)
+		tail_flick = alert*maxf(0.0,cos(stroke+phase))*(1.0 if previewing else smoothstep(0.23,0.75,travel_speed))
+		bones.set_bone_pose_position(bone_ids.Carapace,Vector3.UP*tail_flick*0.10)
 		for i in 5:
-			bend("Abdomen"+str(i),tuck*(0.13+0.02*i),0.024*sin(stroke+phase-i*0.36))
-		bend("Fan",tuck*0.31)
+			bend("Abdomen"+str(i),tail_flick*(0.13+0.02*i),0.024*sin(stroke+phase-i*0.36))
+		bend("Fan",tail_flick*0.31)
+		var walking := 1.0 if previewing else smoothstep(0.012,0.09,travel_speed)*(1.0-tail_flick)
 		for side: int in [-1,1]:
 			var suffix := "L" if side<0 else "R"
 			var beat := stroke+phase+side*1.17
@@ -164,8 +188,8 @@ func animate(now: float, delta: float) -> void:
 			bend("Pincer"+suffix,0,side*(0.10+0.16*sin(beat)+0.24*alert))
 			for i in 4:
 				var gait := stroke+phase+i*1.71+(PI if side<0 else 0.0)
-				var lift := maxf(0.0,cos(gait))
+				var lift := walking*maxf(0.0,cos(gait))
 				var leg_id := suffix+str(i)
-				bend("Leg"+leg_id,0,side*0.38*sin(gait),side*(0.28*lift-0.04))
-				bend("Shin"+leg_id,0,-side*0.12*sin(gait-0.62),side*(0.32*lift-0.08))
+				bend("Leg"+leg_id,0,walking*side*0.38*sin(gait),side*(0.28*lift-0.04))
+				bend("Shin"+leg_id,0,-walking*side*0.12*sin(gait-0.62),side*(0.32*lift-0.08))
 	sync_head()

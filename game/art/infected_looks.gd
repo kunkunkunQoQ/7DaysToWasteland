@@ -134,7 +134,7 @@ static func sculpt_gland(s, kind: String, look: int) -> void:
 			s.loft([Vector4(-0.45,0.27,0.23,0.16),Vector4(-0.37,0.42,0.39,0.045),
 				Vector4(-0.17,0.48,0.52,0.03),Vector4(0.04,0.48,0.55,0.048),
 				Vector4(0.24,0.43,0.39,0.08),Vector4(0.46,0.32,0.25,0.15)],cloth,
-				Vector3.ZERO,Basis(Vector3.BACK,-0.065+look*0.021),20)
+				Vector3.ZERO,Basis(Vector3.BACK,-0.065+look*0.021),14)
 			s.twig([Vector3(-0.34,-0.21,-0.30),Vector3(-0.19,-0.29,-0.412),
 				Vector3(0.02,-0.33,-0.386)],[0.006,0.012,0.003],cloth.darkened(0.18),5)
 			if look!=2:
@@ -204,12 +204,12 @@ static func _civilian(s, kind:String, look:int, joint:String)->void:
 		var cuff:=cloth.lightened(0.17) if look==0 else cloth.darkened(0.14)
 		if not patrol and look==2: cuff=Color("#79726b")
 		s.loft([Vector4(hem-0.021,radius*0.95,radius*0.94,-0.031),Vector4(hem-0.013,radius*1.04,radius,-0.031),
-			Vector4(hem+0.024,radius,radius*0.98,-0.025)],cuff,Vector3.ZERO,Basis(Vector3.BACK,side*0.055))
+			Vector4(hem+0.024,radius,radius*0.98,-0.025)],cuff,Vector3.ZERO,Basis(Vector3.BACK,side*0.055),8)
 		return
 	var w:=0.27 if patrol else 0.235
 	var hem:float=[-0.117,-0.18,-0.252][look] if patrol else [-0.135,-0.187,-0.116][look]
 	s.loft([Vector4(hem,w*0.86,0.154,0.012),Vector4(hem+0.026,w*0.87,0.156,0.012),
-		Vector4(0.035,w*0.84,0.151,0.012)],cloth.darkened(0.065))
+		Vector4(0.035,w*0.84,0.151,0.012)],cloth.darkened(0.065),Vector3.ZERO,Basis.IDENTITY,9)
 	if look==0 or (patrol and look==1):
 		for side:float in [-1,1]:
 			s.triangle(Vector3(side*0.088,0.41,-0.095),Vector3(side*0.153,0.339,-0.150),
@@ -271,12 +271,13 @@ static func _civilian_head(s, patrol:bool, look:int, cloth:Color)->void:
 		var cap:=cloth.darkened(0.23)
 		s.loft([Vector4(0.198,0.153,0.145,0.003),Vector4(0.224,0.160,0.151,-0.003),
 			Vector4(0.293,0.138,0.132,0.009),Vector4(0.329,0.056,0.065,0.012)],cap,
-			Vector3.ZERO,Basis(Vector3.BACK,0.058))
-		s.oval(Vector3(0.003,0.214,-0.14),Vector3(0.139,0.014,0.12),cap,-0.055)
+			Vector3.ZERO,Basis(Vector3.BACK,0.058),10)
+		s.loft([Vector4(-0.012,0.11,0.092,0),Vector4(0.0,0.139,0.12,0),Vector4(0.009,0.118,0.10,0)],
+			cap,Vector3(0.003,0.214,-0.14),Basis(Vector3.BACK,-0.055),8)
 	elif patrol and look==2:
 		var hood:=cloth.darkened(0.08)
 		s.loft([Vector4(0.125,0.159,0.124,0.038),Vector4(0.207,0.171,0.157,0.015),
-			Vector4(0.300,0.146,0.140,0.030),Vector4(0.357,0.038,0.048,0.065)],hood)
+			Vector4(0.300,0.146,0.140,0.030),Vector4(0.357,0.038,0.048,0.065)],hood,Vector3.ZERO,Basis.IDENTITY,10)
 		for side:float in [-1,1]:
 			_ribbon(s,[Vector3(side*0.141,0.23,-0.035),Vector3(side*0.154,0.118,0.00),
 				Vector3(side*0.133,-0.014,0.046)],[0.091,0.104,0.097],Vector3.BACK,hood)
@@ -290,8 +291,8 @@ static func _civilian_head(s, patrol:bool, look:int, cloth:Color)->void:
 		var knit:=Color("#625d58")
 		s.loft([Vector4(0.183,0.154,0.142,0.013),Vector4(0.220,0.160,0.148,0.014),
 			Vector4(0.29,0.144,0.139,0.032),Vector4(0.344,0.081,0.098,0.065),
-			Vector4(0.357,0.031,0.046,0.089)],knit)
-		s.loft([Vector4(0.189,0.159,0.147,0.011),Vector4(0.220,0.164,0.151,0.014)],knit.lightened(0.1))
+			Vector4(0.357,0.031,0.046,0.089)],knit,Vector3.ZERO,Basis.IDENTITY,10)
+		s.loft([Vector4(0.189,0.159,0.147,0.011),Vector4(0.220,0.164,0.151,0.014)],knit.lightened(0.1),Vector3.ZERO,Basis.IDENTITY,10)
 	for side:float in [-1,1]:
 		s.twig([Vector3(side*0.115,0.215,-0.045),Vector3(side*0.137,0.187,-0.019),
 			Vector3(side*0.139,0.152,-0.015)],[0.014,0.016,0.005],hair,6)

@@ -180,8 +180,8 @@ static func upright(actor: Node3D, v: int, coat: Color, skin: Color) -> void:
 	var neck := -0.076 if v in [0,2,5] else -0.035
 	actor._joint("hips",-1,Vector3(0,pelvis_y,0),[])
 	var hips := _sculpt(actor,"hips",10)
-	hips.loft([Vector4(-0.13,wide*0.64,0.108,0.026),Vector4(-0.055,wide*0.88,0.156,0.022),Vector4(0.095,wide*0.79,0.134,0)],fabric)
-	hips.loft([Vector4(0.052,wide*0.83,0.141,0.005),Vector4(0.091,wide*0.81,0.140,0.002)],Color("#534444"))
+	hips.loft([Vector4(-0.13,wide*0.64,0.108,0.026),Vector4(-0.055,wide*0.88,0.156,0.022),Vector4(0.095,wide*0.79,0.134,0)],fabric,Vector3.ZERO,Basis.IDENTITY,9)
+	hips.loft([Vector4(0.052,wide*0.83,0.141,0.005),Vector4(0.091,wide*0.81,0.140,0.002)],Color("#534444"),Vector3.ZERO,Basis.IDENTITY,9)
 	_finish(actor,"hips",hips)
 	actor._joint("torso",0,Vector3(0,0.20,0.010),[])
 	var torso := _sculpt(actor,"torso",11)
@@ -255,12 +255,12 @@ static func upright(actor: Node3D, v: int, coat: Color, skin: Color) -> void:
 		var thigh := _sculpt(actor,leg,15)
 		var trouser := fabric if v!=5 else coat.darkened(0.17)
 		thigh.loft([Vector4(-0.347,0.064*muscular,0.081,-0.019),Vector4(-0.259,0.080*muscular,0.097,-0.014),
-			Vector4(-0.112,0.105*muscular,0.129,0.012),Vector4(0.036,0.10*muscular,0.110,0.018)],trouser)
+			Vector4(-0.112,0.105*muscular,0.129,0.012),Vector4(0.036,0.10*muscular,0.110,0.018)],trouser,Vector3.ZERO,Basis.IDENTITY,9)
 		_finish(actor,leg,thigh)
 		actor._joint(knee,actor.skeleton.find_bone(leg),Vector3(0,-0.322,-0.021),[])
 		var shin := _sculpt(actor,knee,16)
 		shin.loft([Vector4(-0.326,0.054*muscular,0.069,0.019),Vector4(-0.151,0.076*muscular,0.091,0.033),
-			Vector4(-0.063,0.081*muscular,0.092,0.021),Vector4(0.038,0.068*muscular,0.079,0)],trouser.darkened(0.09))
+			Vector4(-0.063,0.081*muscular,0.092,0.021),Vector4(0.038,0.068*muscular,0.079,0)],trouser.darkened(0.09),Vector3.ZERO,Basis.IDENTITY,8)
 		_finish(actor,knee,shin)
 		var ankle := "ankle_"+suffix
 		var ankle_position := Vector3(0,-0.316,0.017)
@@ -269,10 +269,10 @@ static func upright(actor: Node3D, v: int, coat: Color, skin: Color) -> void:
 		var leather := Color("#4a4145")
 		boot.loft([Vector4(-0.405,0.084*muscular,0.134,-0.046),Vector4(-0.380,0.089*muscular,0.142,-0.049),
 			Vector4(-0.335,0.085*muscular,0.126,-0.044),Vector4(-0.277,0.068*muscular,0.082,0.009),
-			Vector4(-0.228,0.068*muscular,0.080,0.017)],leather,-ankle_position)
+			Vector4(-0.228,0.068*muscular,0.080,0.017)],leather,-ankle_position,Basis.IDENTITY,8)
 		if v in [0,3,4]:
 			for band in 2:
-				boot.loft([Vector4(-0.279+band*0.035,0.071*muscular,0.085,0.015),Vector4(-0.268+band*0.035,0.072*muscular,0.085,0.015)],leather.lightened(0.10),-ankle_position)
+				boot.loft([Vector4(-0.279+band*0.035,0.071*muscular,0.085,0.015),Vector4(-0.268+band*0.035,0.072*muscular,0.085,0.015)],leather.lightened(0.10),-ankle_position,Basis.IDENTITY,8)
 		_finish(actor,ankle,boot)
 	if v==4:
 		_hammer(actor)

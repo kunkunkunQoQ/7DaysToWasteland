@@ -1,6 +1,7 @@
 extends RefCounted
 
 const Rag := preload("res://game/actors/physical_ragdoll.gd")
+const ActiveMotion := preload("res://game/actors/active_ragdoll.gd")
 const Hits := preload("res://game/actors/ragdoll_hits.gd")
 const Heron := preload("res://game/art/heron_rig.gd")
 const Fish := preload("res://game/art/lake_fish_rig.gd")
@@ -32,19 +33,20 @@ func weapon_hit(lake: Node3D, from: Vector3, to: Vector3) -> Dictionary:
 		if not _near(body.rig.center(), from, to): continue
 		_trace(best, from, to, id, rows[id].kind, body.model, body.skeleton, body.model.global_transform)
 	for patch in lake.habitats:
-		if not patch.in_range: continue
-		if not absent(patch.heron_id) and _near(patch.bird.global_position, from, to):
+		var heron: Node3D = lake.drivers.get(patch.heron_id)
+		if heron != null and _near(heron.center(), from, to):
 			_trace(best, from, to, patch.heron_id, "heron", patch.upper, patch.upper.bones, patch.upper.global_transform)
-		if not _near(patch.fishes, from, to, 6.0): continue
 		for i in patch.fish_ids.size():
 			var pose: Transform3D = patch.fish_poses[i]
 			if not pose.origin.is_finite() or absent(patch.fish_ids[i]): continue
-			if not _near(pose.origin, from, to, 0.8): continue
-			var live: Dictionary = lake.individual_fish.get(patch.fish_ids[i], {})
-			_trace(best, from, to, patch.fish_ids[i], "lake_fish", live.get("model",patch.school), live.get("skeleton"), pose, patch.beat + i * 1.7, patch.dart)
+			var fish: Node3D = lake.drivers.get(patch.fish_ids[i])
+			if fish == null or not _near(fish.center(), from, to, 0.8): continue
+			var live: Dictionary = lake.individual_fish[patch.fish_ids[i]]
+			_trace(best, from, to, patch.fish_ids[i], "lake_fish", live.model, live.skeleton, pose, patch.beats[i], patch.dart)
 	for animal in lake.bottom_life:
 		var id: String = animal.get_meta("lake_id")
-		if animal.active_pose and not absent(id) and _near(animal.global_position, from, to):
+		var drive: Node3D = lake.drivers.get(id)
+		if drive != null and _near(drive.center(), from, to):
 			_trace(best, from, to, id, animal.species, animal, animal.bones, animal.global_transform)
 	return best
 
@@ -54,26 +56,12 @@ func _near(at: Vector3, from: Vector3, to: Vector3, radius := 2.5) -> bool:
 func _trace(best: Dictionary, from: Vector3, to: Vector3, id: String, kind: String, model: Node3D,
 		skeleton: Skeleton3D, source: Transform3D, beat := 0.0, effort := 0.0) -> void:
 	var nearest := float(best.get("distance", INF))
-	var bounds_by_bone: Dictionary
-	var fish_poses: Array[Transform3D] = []
-	if skeleton != null:
-		bounds_by_bone = Rag.skeleton_bounds(skeleton)
-	else:
-		# The school uses three instanced meshes. Their individually authored fins still have
-		# their own ray targets, without creating a node or collider per fish.
-		Fish.geometry(false)
-		for i in Fish.SEGMENTS.size():
-			var local := Transform3D(Basis.IDENTITY, Fish.PIVOTS[i])
-			if i == 1: local = Fish.spine_transform(beat, effort)
-			if i == 2: local = Fish.tail_transform(beat, effort)
-			var parent: int = Fish.PARENTS[i]
-			fish_poses.append(source * local if parent < 0 else fish_poses[parent] * local)
-			bounds_by_bone[i] = Fish.physical_forms[false][i].get_aabb()
+	var bounds_by_bone := Rag.skeleton_bounds(skeleton)
 	for index: int in bounds_by_bone:
 		if bounds_by_bone[index] == null: continue
 		var bounds: AABB = bounds_by_bone[index]
-		var name: StringName = skeleton.get_bone_name(index) if skeleton != null else StringName(Fish.SEGMENTS[index])
-		var pose := skeleton.global_transform * skeleton.get_bone_global_pose(index) if skeleton != null else fish_poses[index]
+		var name := skeleton.get_bone_name(index)
+		var pose := skeleton.global_transform * skeleton.get_bone_global_pose(index)
 		var radii := (bounds.size * 0.5).max(Vector3.ONE * 0.009)
 		pose *= Transform3D(Basis.from_scale(radii), bounds.get_center())
 		var inv := pose.affine_inverse()
@@ -138,7 +126,7 @@ func strike(lake: Node3D, hit: Dictionary, damage: float, origin: Vector3, heavy
 		row.effort = hit.effort
 		row.erase("pose")
 		row.erase("settled")
-		_spawn(lake, id, row, hit.skeleton)
+		_spawn(lake,id,row)
 	else:
 		bodies[id].rig.kick_at(row.impact, row.hit_point, row.hit_bone)
 		bodies[id].final_sent = false
@@ -155,7 +143,7 @@ func strike(lake: Node3D, hit: Dictionary, damage: float, origin: Vector3, heavy
 	lake.impact_changed.emit()
 	return true
 
-func _spawn(lake: Node3D, id: String, row: Dictionary, source_skeleton: Skeleton3D = null) -> void:
+func _spawn(lake: Node3D, id: String, row: Dictionary) -> void:
 	var model: Node3D
 	match row.kind:
 		"heron": model = Heron.new()
@@ -170,21 +158,16 @@ func _spawn(lake: Node3D, id: String, row: Dictionary, source_skeleton: Skeleton
 		if row.kind == "heron": model.build(row.form == "young", row.face)
 		else: model.build(row.kind, row.form, row.face)
 		skeleton = model.bones
-	if source_skeleton != null:
-		for i in skeleton.get_bone_count():
-			skeleton.set_bone_pose(i, source_skeleton.get_bone_pose(i))
-		if model.has_method("sync_head"):
-			model.sync_head()
-	var rig := Rag.new()
-	model.add_child(rig)
-	rig.set_water_source(lake.stream)
-	if not rig.begin(skeleton, row.impact, row.get("hit_point", Vector3.INF), row.get("hit_bone", &"")):
-		model.queue_free()
-		return
-	if lake.drivers.has(id):
-		if source_skeleton != null and not row.has("pose") and rig.inherit_motion(lake.drivers[id]):
-			rig.kick_at(row.impact, row.hit_point, row.hit_bone)
-		lake._drop_driver(id)
+	var rig: ActiveMotion = lake.take_driver(id)
+	if rig != null:
+		rig.rebind_skeleton(skeleton)
+	else:
+		# A saved or newly replicated body can enter before its living route loads.
+		rig = ActiveMotion.start(lake,skeleton,lake.stream)
+		if rig == null:
+			model.queue_free()
+			return
+	rig.let_go(row.impact,row.get("hit_point",Vector3.INF),row.get("hit_bone",&""))
 	var offset := rig.center() - model.global_position
 	bodies[id] = {"model":model, "skeleton":skeleton, "rig":rig, "offset":offset, "final_sent":row.get("settled",false)}
 	Hits.enable(rig, row.hp <= 0.0, "lake", id)
@@ -210,7 +193,7 @@ func restore(lake: Node3D, incoming: Dictionary) -> void:
 	for id: String in bodies.keys():
 		var row: Dictionary = incoming.get(id, {})
 		if row.is_empty() or row.get("until", -1.0) < 0.0:
-			_remove_body(id, float(lake.session.clock.elapsed), not row.is_empty() and row.get("hp", 0.0) > 0.0)
+			_remove_body(lake,id,float(lake.session.clock.elapsed),float(row.get("hp",rows[id].hp))>0.0)
 		elif row.has("pose") and row.get("revision", 0) != rows.get(id, {}).get("revision", -1):
 			_apply(row, bodies[id].rig)
 			bodies[id].final_sent = row.get("settled", false)
@@ -218,12 +201,18 @@ func restore(lake: Node3D, incoming: Dictionary) -> void:
 	rows = incoming.duplicate(true)
 	lake.countdown = 0.0
 
-func _remove_body(id: String, now: float, recover: bool) -> void:
+func _remove_body(lake: Node3D, id: String, now: float, recover: bool) -> void:
 	if not bodies.has(id): return
 	var body: Dictionary = bodies[id]
+	var resumed := false
 	if recover:
-		_joining[id] = {"from":body.rig.center() - Vector3(body.offset), "start":now}
-	body.rig.release()
+		var at: Transform3D = body.model.global_transform
+		at.origin = body.rig.center()-Vector3(body.offset)
+		_joining[id] = {"from":at.origin,"start":now}
+		if lake.stream.at_surface(at.origin):
+			resumed = lake.resume_animal(id,rows[id].kind,body.rig,at)
+			if resumed: Hits.enable(body.rig,false,"lake",id)
+	if not resumed: body.rig.stop_driving()
 	body.model.hide()
 	body.model.queue_free()
 	bodies.erase(id)
@@ -243,22 +232,16 @@ func advance(lake: Node3D, now: float, eyes: Array[Vector3]) -> void:
 				if unobserved: replenished.append(id)
 			continue
 		if now >= float(row.until):
-			_remove_body(id, now, row.hp > 0.0)
+			_remove_body(lake,id,now,row.hp>0.0)
 			rows[id] = {"kind":row.kind, "hp":row.hp, "until":-1.0, "form":row.form, "face":row.face,
 				"home":row.home, "revision":int(row.revision) + 1, "return_at":row.get("return_at", -1.0)}
 			changed = true
 			continue
 		var point: Vector3 = bodies[id].rig.center() if bodies.has(id) else Vector3(row.source.origin)
-		var near := false
-		for eye in eyes:
-			if eye.distance_squared_to(point) < 80.0 * 80.0:
-				near = true
-				break
-		if near and lake.stream.at_surface(point):
+		if lake.stream.at_surface(point):
 			if not bodies.has(id): _spawn(lake, id, row)
 			if bodies.has(id):
 				var body: Dictionary = bodies[id]
-				body.model.visible = eyes[0].distance_squared_to(point) < 80.0 * 80.0
 				if not lake.session.replica and body.final_sent != body.rig.is_settled():
 					body.final_sent = body.rig.is_settled()
 					row.revision = int(row.revision) + 1
@@ -266,7 +249,7 @@ func advance(lake: Node3D, now: float, eyes: Array[Vector3]) -> void:
 		elif bodies.has(id):
 			_save_pose(id, row)
 			row.settled = true
-			_remove_body(id, now, false)
+			_remove_body(lake,id,now,false)
 			if not lake.session.replica:
 				row.revision = int(row.revision) + 1
 				changed = true

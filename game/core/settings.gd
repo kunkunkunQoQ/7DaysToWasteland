@@ -11,7 +11,7 @@ const ACTIONS := {
 	"crouch": ["蹲伏／下潜", KEY_CTRL], "use": ["交互", KEY_E],
 	"fire": ["主动作", MOUSE_BUTTON_LEFT], "alternate": ["副动作", MOUSE_BUTTON_RIGHT],
 	"reload": ["装填", KEY_R], "inventory": ["背包", KEY_TAB],
-	"map": ["地图", KEY_M], "journal": ["任务", KEY_J],
+	"map": ["地图", KEY_M], "journal": ["任务", KEY_J], "chat": ["聊天", KEY_ENTER],
 	"shape": ["切换建造形状", KEY_Q], "rotate": ["旋转方块", KEY_T],
 	"pause_game": ["暂停／返回", KEY_ESCAPE], "flashlight": ["开关提灯", KEY_L],
 	"swap_hands": ["主副手互换", KEY_F], "offhand_use": ["使用副手／持盾", KEY_V],

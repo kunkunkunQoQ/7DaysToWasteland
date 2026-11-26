@@ -65,6 +65,7 @@ var windup := 0.0
 var attack_kind := WastelandCreatureBrain.Action.NONE
 var motion_action := WastelandCreatureBrain.Action.NONE
 var motion_rest := 0.0
+var foot_contacts := preload("res://game/actors/creature_foot_contacts.gd").new()
 var fuse_left := 0.0
 var blast_ring: MeshInstance3D
 var gland: MeshInstance3D
@@ -79,6 +80,7 @@ var skeleton := Skeleton3D.new()
 var collider: CollisionShape3D
 var capsule := CapsuleShape3D.new()
 var body_parts: Dictionary = {}
+var cloth_motion: Wardrobe.ClothMotion
 var render_colors: Dictionary = {}
 var actor_rng := RandomNumberGenerator.new()
 var hurtboxes := preload("res://game/actors/infected_hitboxes.gd").new()
@@ -94,7 +96,7 @@ var surface_retry := 0.0
 var ground_cast := PhysicsShapeQueryParameters3D.new()
 var separation_left := 0.0
 var separation_force := Vector3.ZERO
-var fall_peak := 0.0
+var fall := preload("res://game/actors/creature_fall.gd").new()
 var trap_left := 0.0
 var trap_scale := 1.0
 var scream_ring: MeshInstance3D
@@ -161,7 +163,7 @@ func revive(kind: String, point: Vector3, night_wave: bool, previous: Dictionary
 	limp_left = maxf(0.0, float(previous.get("limp_left", 0.0)))
 	hit_chain = 0
 	hit_chain_left = 0.0
-	fall_peak = point.y
+	fall.reset(point)
 	ground_step = false
 	surface_retry = 0.0
 	separation_left = 0.0
@@ -190,6 +192,7 @@ func revive(kind: String, point: Vector3, night_wave: bool, previous: Dictionary
 	motion_distance = 0.0
 	motion_speed = 0.0
 	motion_turn = 0.0
+	foot_contacts.clear()
 	motion_yaw = rotation.y
 	motion_water = false
 	motion_floor_normal = Vector3.UP
@@ -218,11 +221,15 @@ func revive(kind: String, point: Vector3, night_wave: bool, previous: Dictionary
 	if not animal:
 		_posture()
 	hurtboxes.pose(self)
+	if brain.state != WastelandCreatureBrain.State.DEAD: _ensure_active_motion()
 	if brain.state in [WastelandCreatureBrain.State.DEAD, WastelandCreatureBrain.State.KNOCKDOWN]:
 		sync_ragdoll(previous.get("ragdoll_pose",PackedFloat32Array()), previous.get("ragdoll_impact",Vector3.ZERO),
-			previous.get("ragdoll_hit_at",Vector3.INF),previous.get("ragdoll_hit_bone",&""))
+			previous.get("ragdoll_hit_at",Vector3.INF),previous.get("ragdoll_hit_bone",&""),previous.get("fall_launch",Vector3.INF))
 		if ragdoll != null and not previous.get("ragdoll_settled",false) and not session.replica:
 			ragdoll.kick(Vector3.ZERO)
+			if previous.has("fall_drop") and hp>0:
+				ragdoll.set_motion(previous.get("fall_velocity",Vector3.ZERO))
+				_watch_fall(maxf(0.0,float(previous.fall_drop)))
 	if type == "bloater" and hp <= 0.0 and brain.state != WastelandCreatureBrain.State.DEAD:
 		_prime_rupture(float(previous.get("fuse", spec.ai.fuse)))
 
@@ -276,6 +283,8 @@ func max_move_speed() -> float:
 	return speed * (1.0 - 0.17*(limb_damage.z+limb_damage.w))
 
 func deactivate() -> void:
+	fall.reset()
+	if cloth_motion: cloth_motion.reset()
 	_stop_active_motion()
 	rise_from.clear()
 	rise_target.clear()
@@ -334,6 +343,10 @@ func serialize() -> Dictionary:
 		row.fsm = brain.state
 		row.facing = rotation.y
 		row.state_left = brain.state_left
+		if fall.from_fall: row.fall_launch = fall.launch_velocity
+		if fall.pending:
+			row.fall_drop = maxf(0.0,fall.peak-physical_position().y)
+			row.fall_velocity = ragdoll.motion()
 	if fuse_left > 0.0: row.fuse = fuse_left
 	if not morph.is_empty():
 		row.morph = morph
@@ -366,6 +379,7 @@ func serialize() -> Dictionary:
 
 func _rebuild_model() -> void:
 	_stop_active_motion()
+	cloth_motion = null
 	gland = null
 	rest_contacts.clear()
 	limb_damage = InfectedLimbs.decode(limb_index)
@@ -439,7 +453,7 @@ func _rebuild_model() -> void:
 		capsule.height = height * (1.02 if armored else 1.06)
 		WastelandBestiary.mutation(self,armored)
 	if not spec.get("animal", false):
-		Wardrobe.dress(self)
+		cloth_motion = Wardrobe.dress(self)
 		InfectedLimbs.fit(self)
 	WastelandBestiary.attach_april_face(self)
 	hurtboxes.fit(self)
@@ -510,6 +524,8 @@ func begin_death(impact := Vector3.ZERO, hit_at := Vector3.INF, hit_bone: String
 	if brain.state == WastelandCreatureBrain.State.DEAD:
 		return
 	hp = 0.0
+	if fall.pending and ragdoll: ragdoll.watch_landing(false)
+	fall.pending = false
 	brain._cancel_action()
 	brain.state = WastelandCreatureBrain.State.DEAD
 	brain.state_left = CORPSE_SECONDS
@@ -538,29 +554,39 @@ func ragdoll_pose() -> PackedFloat32Array:
 func ragdoll_settled() -> bool:
 	return ragdoll != null and ragdoll.is_settled()
 
-func sync_ragdoll(pose: PackedFloat32Array, impact := Vector3.ZERO, hit_at := Vector3.INF, hit_bone: StringName = &"") -> void:
+func sync_ragdoll(pose: PackedFloat32Array, impact := Vector3.ZERO, hit_at := Vector3.INF, hit_bone: StringName = &"", fall_launch := Vector3.INF) -> void:
 	if brain.state not in [WastelandCreatureBrain.State.DEAD, WastelandCreatureBrain.State.KNOCKDOWN]:
 		if ragdoll != null:
 			_start_rise(global_position)
 		return
 	if ragdoll == null:
+		foot_contacts.clear()
 		ragdoll_start_frame = Engine.get_physics_frames()
 		rise_from.clear()
 		rise_target.clear()
 		ragdoll_impact = impact
 		ragdoll_hit_at = hit_at
 		ragdoll_hit_bone = hit_bone
+		fall.from_fall = fall_launch.is_finite()
+		var push := Vector3.ZERO if fall.from_fall else impact
 		if active_motion != null:
-			ragdoll = active_motion.let_go(impact,hit_at,hit_bone)
+			ragdoll = active_motion.let_go(push,hit_at,hit_bone)
 			active_motion = null
 		else:
 			ragdoll = PhysicalRagdoll.new()
 			add_child(ragdoll)
 			if session is WastelandSession:
 				ragdoll.set_water_source(session.stream)
-			if not ragdoll.begin(skeleton,impact,hit_at,hit_bone):
+			if not ragdoll.begin(skeleton,push,hit_at,hit_bone):
 				_clear_ragdoll()
 				return
+			if cloth_motion:
+				ragdoll.physics_pose_written.connect(cloth_motion.tick)
+		fall.last = ragdoll.center()
+		fall.peak = fall.last.y
+		if fall.from_fall:
+			fall.launch_velocity = fall_launch
+			ragdoll.set_motion(fall_launch)
 		hurt = 0.0
 		visible_hurt = 0.0
 		for paint in render_colors.values():
@@ -610,11 +636,73 @@ func _stop_active_motion() -> void:
 		active_motion.stop_driving()
 		active_motion = null
 
+func _ensure_active_motion() -> void:
+	if active_motion or ragdoll or motion_preview or get_parent()!=director or not session is WastelandSession: return
+	if not session.stream.at_surface(global_position): return
+	active_motion = ActiveMotion.start(self,skeleton,session.stream)
+	if active_motion:
+		active_motion.pose_applied.connect(hurtboxes.pose.bind(self))
+		if cloth_motion: active_motion.physics_pose_written.connect(cloth_motion.tick)
+
+func _watch_fall(drop: float) -> void:
+	fall.passive(ragdoll.center(),drop)
+	if not ragdoll.landing_contact.is_connected(_landed): ragdoll.landing_contact.connect(_landed)
+	ragdoll.watch_landing(true)
+
+func _deep_water(at: Vector3) -> bool:
+	return at.y<=WastelandTerrainGen.WATER_LEVEL+0.06 and session.stream.water_at(at) and session.stream.ground_at(at)<WastelandTerrainGen.WATER_LEVEL-maxf(0.80,capsule.height*0.56)
+
+func _open_water_landing(at: Vector3, movement: Vector3) -> bool:
+	var height := at.y-WastelandTerrainGen.WATER_LEVEL
+	if height<=0.0: return _deep_water(at)
+	var seconds := (movement.y+sqrt(movement.y*movement.y+36.0*height))/18.0
+	var entry := at+Vector3(movement.x,0,movement.z)*seconds
+	entry.y = WastelandTerrainGen.WATER_LEVEL
+	if not _deep_water(entry): return false
+	return brain.route.ray(at,entry+Vector3.UP*0.02,1|2|8).is_empty()
+
+func _landed(_bone: StringName, at: Vector3, _normal: Vector3, closing_speed: float) -> void:
+	if not fall.pending or not active or hp<=0.0 or session.replica: return
+	fall.pending = false
+	ragdoll.watch_landing(false)
+	var drop := maxf(0.0,fall.peak-ragdoll.center().y)
+	fall.peak = ragdoll.center().y
+	var fraction := 0.0 if _deep_water(at) else fall.damage_fraction(drop,closing_speed)
+	if fraction>0.0:
+		hp = maxf(0.0,hp-max_health()*fraction)
+		session.audio.play_at("hit",at,clampf(0.45+fraction,0.45,1.0))
+	if hp<=0.0:
+		begin_death()
+		director.retain_corpse(self)
+	else:
+		brain.state_left = maxf(brain.state_left,0.60+minf(fraction,1.0)*1.25)
+
+func _follow_fall(delta: float) -> void:
+	if session.replica: return
+	var point := ragdoll.center()
+	if fall.last.is_finite() and fall.last.distance_to(point)>maxf(0.95,ragdoll.motion().length()*delta*2.0+0.35):
+		if fall.pending: ragdoll.watch_landing(false)
+		fall.reset(point)
+	if _deep_water(point):
+		if fall.pending: _landed(&"",point,Vector3.UP,0.0)
+		fall.last = point
+		fall.peak = point.y
+		return
+	if not fall.pending:
+		fall.peak = maxf(fall.peak,point.y)
+		if fall.dangerous(fall.peak-point.y,-ragdoll.motion().y,capsule.height):
+			_watch_fall(fall.peak-point.y)
+	if fall.pending and ragdoll_settled(): _landed(&"",point,Vector3.UP,0.0)
+	fall.last = point
+
 func _clear_ragdoll() -> void:
 	if ragdoll == null:
 		return
 	ragdoll.release()
 	ragdoll = null
+	_restore_capsule()
+
+func _restore_capsule() -> void:
 	corpse_hits_enabled = false
 	collider.transform = Transform3D(Basis.IDENTITY, Vector3.UP * capsule.height * 0.5)
 	if active and hp > 0.0:
@@ -639,6 +727,10 @@ func _recover_at() -> Vector3:
 		query.transform = Transform3D(Basis.IDENTITY,foot + Vector3.UP * capsule.height * 0.5)
 		if space.intersect_shape(query,1).is_empty():
 			return foot
+	if _deep_water(center):
+		var foot := Vector3(center.x,maxf(session.stream.ground_at(center)+0.05,WastelandTerrainGen.WATER_LEVEL-0.55),center.z)
+		query.transform = Transform3D(Basis.IDENTITY,foot+Vector3.UP*capsule.height*0.5)
+		if space.intersect_shape(query,1).is_empty(): return foot
 	return Vector3.INF
 
 func _start_rise(foot: Vector3) -> void:
@@ -648,11 +740,20 @@ func _start_rise(foot: Vector3) -> void:
 	for i in skeleton.get_bone_count():
 		rise_from.append(skeleton.get_bone_pose(i))
 	var pelvis_world := skeleton.global_transform * rise_from[0]
-	_clear_ragdoll()
+	if ragdoll is ActiveMotion:
+		active_motion = ragdoll as ActiveMotion
+		ragdoll = null
+		active_motion.resume_driving()
+		_restore_capsule()
+	else:
+		_clear_ragdoll()
 	global_position = foot
+	fall.reset(foot)
 	rise_from[0] = skeleton.global_transform.affine_inverse() * pelvis_world
 	for i in skeleton.get_bone_count():
 		rise_target.append(skeleton.get_bone_pose(i))
+		skeleton.set_bone_pose(i,rise_from[i])
+	if active_motion: active_motion.capture_targets()
 	rise_time = 0.0
 
 func hand_impact_damage(zone: String, origin: Vector3, hit_bone: StringName = &"") -> int:
@@ -735,6 +836,7 @@ func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSu
 		return
 	if brain.state == WastelandCreatureBrain.State.DEAD:
 		_fade_hit_flash(delta)
+		if cloth_motion and ragdoll_settled(): cloth_motion.tick_resting(delta)
 		brain.state_left = maxf(0.0, brain.state_left - delta)
 		if brain.state_left <= 0.0:
 			director.release(self)
@@ -747,11 +849,17 @@ func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSu
 			director.rupture(self)
 		return
 	if ragdoll != null and brain.state == WastelandCreatureBrain.State.KNOCKDOWN:
+		_follow_fall(delta)
+		if hp<=0.0: return
+		if fall.pending and physical_position().y < -34.0 and session.stream.below_terrain(physical_position()):
+			director.release(self)
+			return
 		_fade_hit_flash(delta)
+		if cloth_motion and ragdoll_settled(): cloth_motion.tick_resting(delta)
 		brain.state_left = maxf(0.0,brain.state_left - delta)
 		limp_left = maxf(0.0,limp_left - delta)
 		_update_downed_hitboxes()
-		if brain.state_left <= 0.0:
+		if brain.state_left <= 0.0 and not fall.pending:
 			var foot := _recover_at()
 			if not foot.is_finite():
 				brain.state_left = 0.2
@@ -759,7 +867,6 @@ func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSu
 					director.release(self)
 				return
 			_start_rise(foot)
-			fall_peak = foot.y
 			velocity = Vector3.ZERO
 			ground_step = false
 			surface_retry = 0.0
@@ -812,12 +919,10 @@ func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSu
 		separation_force = director.separation(self)
 	var crowd := separation_force if mobile and not animal else Vector3.ZERO
 	var drift := (walk + crowd * 1.18).limit_length() * move_speed
-	var accel := 9.0 if stagger > 0.0 else 20.0 if brain.charge_left > 0.0 else 17.0
-	velocity.x = move_toward(velocity.x, drift.x, delta * accel)
-	velocity.z = move_toward(velocity.z, drift.z, delta * accel)
 	var face := brain.desired_facing if brain.desired_facing != Vector3.ZERO else walk
-	if face.length_squared() > 0.05:
-		rotation.y = lerp_angle(rotation.y, atan2(-face.x, -face.z), minf(1.0, delta * 8.5))
+	_steer(drift, face, delta)
+	if active_motion and grounded() and not submerged:
+		velocity = active_motion.supported_velocity(velocity)
 	if submerged:
 		velocity.y = move_toward(velocity.y, (-0.57 - global_position.y) * 3.0, delta * 12.0)
 		water_step -= delta
@@ -829,7 +934,9 @@ func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSu
 		velocity.y -= delta * 18.0
 	var before := global_position
 	var next := before + Vector3(velocity.x, 0, velocity.z) * delta
-	if session.stream.at_surface(next):
+	var loaded: bool = session.stream.at_surface(next)
+	var incoming := velocity
+	if loaded:
 		surface_retry = maxf(0.0, surface_retry - delta)
 		if not animal and not submerged and surface_retry <= 0.0:
 			var on_structure := not ground_step and is_on_floor() and not brain.route.ray(before + Vector3.UP * 0.16, before - Vector3.UP * 0.14, 2 | 8).is_empty()
@@ -842,12 +949,19 @@ func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSu
 			ground_step = false
 		if not ground_step:
 			move_and_slide()
-	if grounded():
-		if fall_peak - global_position.y > 2.5:
-			brain.try_rage()
-		fall_peak = global_position.y
+	if loaded and not submerged and not session.replica:
+		if fall.capsule(before,global_position,grounded(),-incoming.y,capsule.height) and not _open_water_landing(global_position,incoming):
+			var drop := fall.peak-global_position.y
+			brain.interrupt(true,0.65)
+			sync_ragdoll(PackedFloat32Array(),incoming,Vector3.INF,&"",incoming)
+			if ragdoll:
+				_watch_fall(drop)
+				return
 	else:
-		fall_peak = maxf(fall_peak, global_position.y)
+		fall.reset(global_position)
+		if not loaded:
+			ground_step = false
+			velocity.y = 0.0
 	var travel := global_position - before
 	_update_support(delta,distance)
 	brain.route.moved(delta, travel, move_speed)
@@ -855,6 +969,30 @@ func think(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSu
 
 func grounded() -> bool:
 	return ground_step or is_on_floor()
+
+func _steer(desired: Vector3, face: Vector3, delta: float) -> void:
+	var planar := Vector2(velocity.x, velocity.z)
+	var target := Vector2(desired.x, desired.z)
+	var speed := float(spec.speed)
+	var heavy := type in ["boar","stag","brute","bloater","bulwark"]
+	var response := 0.40 if heavy else 0.27
+	var accel := clampf(speed / response, 4.0, 17.0)
+	if planar.dot(target - planar) < 0.0:
+		accel *= 1.4
+	if brain.charge_left > 0.0:
+		accel = 20.0
+	elif stagger > 0.0:
+		accel = 9.0
+	elif low_crawl() or type == "crawler":
+		accel *= 0.70
+	var motion := planar.move_toward(target, accel * delta)
+	velocity.x = motion.x
+	velocity.z = motion.y
+	if face.length_squared() > 0.05:
+		var yaw := atan2(-face.x, -face.z)
+		var moving := smoothstep(0.15, speed, motion.length())
+		var turn_rate := lerpf(5.5, 3.0 if heavy else 4.4, moving)
+		rotation.y = rotate_toward(rotation.y, yaw, turn_rate * delta)
 
 func _update_support(delta: float, distance: float) -> void:
 	if distance>54.0:
@@ -932,6 +1070,7 @@ func stride_length(speed: float) -> float:
 func _pose(delta: float, distance: float, travel := -1.0) -> void:
 	if ragdoll != null:
 		_fade_hit_flash(delta)
+		if cloth_motion and ragdoll_settled(): cloth_motion.tick_resting(delta)
 		_update_downed_hitboxes()
 		return
 	# Preview actors walk in place. World actors supply the distance that physics actually allowed.
@@ -942,7 +1081,7 @@ func _pose(delta: float, distance: float, travel := -1.0) -> void:
 		return
 	var span := phase_clock
 	phase_clock = 0.0
-	var drive := not motion_preview and get_parent() == director and session is WastelandSession and ActiveMotion.wanted(session,global_position,active_motion)
+	var drive := not motion_preview and get_parent() == director and session is WastelandSession
 	if active_motion != null:
 		if drive:
 			active_motion.restore_targets()
@@ -952,6 +1091,19 @@ func _pose(delta: float, distance: float, travel := -1.0) -> void:
 		skeleton.set_bone_pose(i,rise_target[i])
 	_fade_hit_flash(span)
 	rig.rotation = Vector3(impact_tilt.x, 0.0, impact_tilt.y) * (hurt / 0.81)
+	var grounded_pose: bool = grounded() or (session is WastelandSession and session.replica and absf(velocity.y) < 0.70)
+	var supporting: bool = travel >= 0.0 and not motion_preview and distance <= 27.0 and grounded_pose and not motion_water and rise_from.is_empty() and motion_rest <= 0.01
+	if supporting:
+		foot_contacts.enabled = true
+		foot_contacts.recovery_foot = -1
+		if active_motion != null and active_motion.balance != null:
+			foot_contacts.recovery_foot = active_motion.balance.stepping_foot
+		# When pivoting in place the feet travel around the hips. A blocked
+		# character with unchanged facing still stops its gait completely.
+		var pivot := absf(angle_difference(motion_yaw, rotation.y)) * capsule.radius
+		motion_distance = maxf(motion_distance, pivot)
+	elif foot_contacts.enabled:
+		foot_contacts.clear()
 	var measured_speed := motion_distance/span
 	var blend := 1.0-exp(-15.0*span)
 	motion_speed = lerpf(motion_speed,measured_speed,blend)
@@ -1082,11 +1234,13 @@ func _pose(delta: float, distance: float, travel := -1.0) -> void:
 			rise_target.clear()
 	if drive:
 		if active_motion == null:
-			active_motion = ActiveMotion.start(self,skeleton,session.stream)
-			if active_motion != null:
-				active_motion.pose_applied.connect(hurtboxes.pose.bind(self))
+			_ensure_active_motion()
 		else:
 			active_motion.capture_targets()
+		if active_motion != null:
+			active_motion.balance.support_enabled = grounded_pose and not motion_water and motion_rest <= 0.01
+	if cloth_motion and active_motion == null:
+		cloth_motion.tick(span,distance)
 	hurtboxes.pose(self)
 
 func _fade_hit_flash(delta: float) -> void:

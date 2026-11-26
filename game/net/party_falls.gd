@@ -50,8 +50,10 @@ static func restore_corpses(session: WastelandSession, rows: Array) -> void:
 		body.add_to_group(GROUP)
 
 static func _spawn(session: WastelandSession, row: Dictionary, source_avatar: WastelandPartyAvatar = null) -> WastelandSurvivorRagdoll:
-	return SurvivorBody.spawn(session,row.at,row.profile,row.gear,row.held,row.offhand,row.loaded,
+	var body := SurvivorBody.spawn(session,row.at,row.profile,row.gear,row.held,row.offhand,row.loaded,
 		row.crouch,row.swim,row.velocity,row.impact,row.get("impact_at",Vector3.INF),row.get("impact_bone",&""),source_avatar)
+	if body and row.get("falling",false): body.physics.set_motion(row.velocity)
+	return body
 
 func snapshot(session: WastelandSession, lan: WastelandLan) -> Array:
 	var rows := []
@@ -79,7 +81,7 @@ func apply(session: WastelandSession, local_peer: int, row: Dictionary) -> void:
 			session.player.sync_ragdoll(0,Vector3.ZERO)
 			current.erase(peer)
 		else:
-			detach(peer)
+			detach(peer, session.network.replica_avatar(peer) if is_instance_valid(session.network) else null)
 		return
 	var id: int = row.id
 	var body = bodies.get(id)
@@ -107,10 +109,12 @@ func apply(session: WastelandSession, local_peer: int, row: Dictionary) -> void:
 		current[peer] = id
 	if row.has("pose"): body.physics.apply_pose(row.pose)
 
-func detach(peer: int) -> void:
+func detach(peer: int, recovering_avatar: WastelandPartyAvatar = null) -> void:
 	var body = bodies.get(current.get(peer,-1))
 	if is_instance_valid(body) and body.remaining <= 0.0:
-		body.dismiss()
+		if is_instance_valid(recovering_avatar):
+			body.recover_into(recovering_avatar)
+		else: body.dismiss()
 	current.erase(peer)
 
 func _removed(id: int, peer: int) -> void:

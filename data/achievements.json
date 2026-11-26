@@ -60,6 +60,7 @@
     {"id":"plumber","category":"odd","name":"水厂厂长","desc":"亲手用净水泵滤出 20 份净水。","metric":"pump_water","target":20,"parent":"floating","reward":"","hidden":true,"hint":"一套泵、一把纤维，就能开张。"},
     {"id":"snowtea","category":"odd","name":"冷饮热着喝","desc":"站在雪山饮用 3 份草本暖饮。","metric":"summit_tea","target":3,"parent":"cookhat","reward":"","hidden":true,"hint":"把茶点带去雪线上，趁热喝。"},
     {"id":"clock_out","category":"odd","name":"迷路但准时下班","desc":"同一天从驿站出发，亲自到至少320米外的中继站签收远行货包，再在17:00至18:00赶回出发站交单。","metric":"clockout_dispatch","target":1,"parent":"off_duty","reward":"meme_clock","hidden":true,"hint":""},
+    {"id":"shiver_chat","category":"odd","name":"这事得说三遍","desc":"在聊天栏里，于 60 秒内发出 3 条内容不同的消息。","metric":"shiver_chat","target":3,"parent":"","reward":"meme_shawl","hidden":true,"hint":"荒原有人在听你说话。"},
     {"id":"wardrobe","category":"odd","name":"衣柜里住了个马戏团","desc":"累计拥有过全部 12 款荒诞装备。","metric":"relics","target":12,"parent":"catwalk","reward":"","hidden":true,"hint":"从外星访客到流动路标，整套都想试试。"}
   ]
 }

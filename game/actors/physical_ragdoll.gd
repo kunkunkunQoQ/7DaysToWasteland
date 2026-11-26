@@ -1,6 +1,9 @@
 extends Node3D
 ## The solver owns world-space bodies. The character keeps its original meshes, skin and equipment.
 
+signal physics_pose_written(delta: float)
+signal landing_contact(bone: StringName, point: Vector3, normal: Vector3, closing_speed: float)
+
 const WORLD_MASK := 1 | 2 | 8
 const CORPSE_SECONDS := 20.0
 const CONTACT_LAYER := 1 << 17
@@ -19,6 +22,10 @@ class Segment:
 	var radius := 0.1
 	var extents := Vector3.ONE * 0.1
 	var previous: Transform3D
+	var incoming := Vector3.ZERO
+	var incoming_spin := Vector3.ZERO
+	var saved_contacts := 0
+	var saved_ccd := false
 
 var _parts: Array[Segment] = []
 var _named_parts := {}
@@ -39,6 +46,7 @@ var _support_transform: Transform3D
 var _water_source: Node3D
 var _water_poll := 0.0
 var _submerged := false
+var _watching_landing := false
 static var _skin_bounds := {}
 
 func _ready() -> void:
@@ -88,6 +96,55 @@ func center() -> Vector3:
 
 func motion() -> Vector3:
 	return _parts[0].body.linear_velocity if not _parts.is_empty() else Vector3.ZERO
+
+func set_motion(incoming: Vector3) -> void:
+	var shift := incoming - motion()
+	for part in _parts: part.body.linear_velocity += shift
+
+func watch_landing(enabled: bool) -> void:
+	if enabled == _watching_landing: return
+	_watching_landing = enabled
+	for part in _parts:
+		var body := part.body
+		if enabled:
+			part.saved_contacts = body.max_contacts_reported
+			part.saved_ccd = body.continuous_cd
+			part.incoming = body.linear_velocity
+			part.incoming_spin = body.angular_velocity
+			body.max_contacts_reported = maxi(4, part.saved_contacts)
+			body.continuous_cd = true
+		else:
+			body.max_contacts_reported = part.saved_contacts
+			body.continuous_cd = part.saved_ccd
+
+func _sample_landing() -> void:
+	var speed := 0.0
+	var point := Vector3.ZERO
+	var normal := Vector3.UP
+	var bone: StringName
+	for part in _parts:
+		var body := part.body
+		var state := PhysicsServer3D.body_get_direct_state(body.get_rid())
+		if state:
+			for i in state.get_contact_count():
+				var surface := state.get_contact_local_normal(i)
+				if surface.y < 0.30: continue
+				var other := state.get_contact_collider_object(i) as CollisionObject3D
+				if not other or (other.collision_layer & WORLD_MASK) == 0: continue
+				var at := state.get_contact_local_position(i)
+				var ground_speed := state.get_contact_collider_velocity_at_position(i)
+				var incoming := part.incoming + part.incoming_spin.cross(at - body.global_position)
+				var closing := maxf((ground_speed-incoming).dot(surface), (ground_speed-state.get_contact_local_velocity_at_position(i)).dot(surface))
+				if not bone.is_empty() and closing <= speed: continue
+				speed = maxf(0.0, closing)
+				point = at
+				normal = surface
+				bone = StringName(String(body.name).trim_prefix("Body_"))
+		part.incoming = body.linear_velocity
+		part.incoming_spin = body.angular_velocity
+	if not bone.is_empty():
+		watch_landing(false)
+		landing_contact.emit(bone, point, normal, speed)
 
 func set_water_source(stream: Node3D) -> void:
 	_water_source = stream
@@ -181,7 +238,7 @@ func release() -> void:
 		elif is_instance_valid(_skeleton) and part.bone >= 0 and part.bone < _skeleton.get_bone_count():
 			_skeleton.set_bone_pose(part.bone, part.original)
 	if is_instance_valid(_avatar):
-		_sync_avatar_skin()
+		_avatar.sync_joint_skins()
 	elif is_instance_valid(_face_model):
 		_face_model.sync_head()
 	queue_free()
@@ -230,12 +287,15 @@ func _physics_process(dt: float) -> void:
 		queue_free()
 		return
 	_sync_model()
+	physics_pose_written.emit(dt)
+	if _watching_landing: _sample_landing()
 	if is_instance_valid(_water_source):
 		_water_poll -= dt
 		if _water_poll <= 0.0:
 			_water_poll = 0.20
 			var at := center()
 			var wet: bool = at.y < WastelandTerrainGen.WATER_LEVEL and _water_source.water_at(at) and at.y >= _water_source.ground_at(at) - 0.22
+			if is_instance_valid(_avatar): _avatar.garment_swimming = wet
 			if wet != _submerged:
 				_submerged = wet
 				for part in _parts:
@@ -317,26 +377,13 @@ func _sync_model() -> void:
 	if is_instance_valid(_avatar):
 		for part in _parts:
 			part.node.global_transform = part.body.global_transform * part.bind
-		_sync_avatar_skin()
+		_avatar.sync_joint_skins()
 	elif is_instance_valid(_skeleton):
 		var inverse := _skeleton.global_transform.affine_inverse()
 		for part in _parts:
 			_skeleton.set_bone_global_pose(part.bone, inverse * part.body.global_transform * part.bind)
 		if is_instance_valid(_face_model):
 			_face_model.sync_head()
-
-func _sync_avatar_skin() -> void:
-	# The party model uses separate blended skins mounted on the animated joint pivots.
-	var waist := _avatar.jacket.basis.orthonormalized()
-	var waist_y := 0.85 * float(_avatar.LEG_LENGTH[_avatar.outfit]) + 0.125 * _avatar.jacket.scale.y
-	_avatar.shorts_rig.set_bone_pose_rotation(0, waist.get_rotation_quaternion())
-	_avatar.shorts_rig.set_bone_pose_position(0, Vector3.UP * waist_y - waist * (Vector3.UP * waist_y))
-	for i in 2:
-		_avatar.shorts_rig.set_bone_pose_rotation(i + 1, _avatar.legs[i].quaternion)
-		_avatar.arm_rigs[i].set_bone_pose_rotation(1, _avatar.elbows[i].quaternion)
-		_avatar.arm_rigs[i].set_bone_pose_rotation(2, _avatar.wrist_joints[i].quaternion)
-		_avatar.leg_rigs[i].set_bone_pose_rotation(1, _avatar.knees[i].quaternion)
-		_avatar.leg_rigs[i].set_bone_pose_rotation(2, _avatar.ankle_joints[i].quaternion)
 
 func _build_avatar() -> void:
 	var a := _avatar
