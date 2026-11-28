@@ -84,7 +84,13 @@ var controls_enabled := false:
 	set(value):
 		controls_enabled=value
 		if not value: reset_forward_taps()
-var simulation_paused := false
+var simulation_paused := false:
+	set(value):
+		if value == simulation_paused: return
+		simulation_paused = value
+		if is_inside_tree():
+			for rig: WastelandActiveRagdoll in get_tree().get_nodes_in_group(WastelandActiveRagdoll.GROUP):
+				if is_ancestor_of(rig): rig.set_locomotion_paused(value)
 var death_screen := false
 var deaths := 0
 var guest_states: Dictionary = {}
@@ -537,7 +543,7 @@ func _process_controls(delta: float) -> void:
 	var kind: String = item.get("kind", "")
 	player.hand.charge = heavy_charge
 	if action_pressed("discard") and held != "":
-		discard(held)
+		discard(held,true,bag.active)
 	if action_pressed("reload") and kind == "ranged":
 		start_reload(held)
 	next_hint -= delta
@@ -585,10 +591,10 @@ func _process_controls(delta: float) -> void:
 			_open_for_player("vehicle", nearby.get_meta("vehicle_id"))
 		elif not action_held("fire") and action_lock<=0.0 and not heavy_pending:
 			if kind in ["food","med"]:
-				player.consume(held)
+				player.consume(held,bag.active)
 				action_lock=0.42
 			elif kind in ["build","device"] and not context.is_empty() and (not is_instance_valid(target) or target.get_meta("kind","")!="block"):
-				if construction.place(construction.target_position(context),held,shape,turn,player.global_position): action_lock=0.28
+				if construction.place(construction.target_position(context),held,shape,turn,player.global_position,bag.active): action_lock=0.28
 			elif alternate_uses_offhand() and not action_pressed("offhand_use"):
 				_use_offhand()
 	if heavy_pending:
@@ -615,17 +621,17 @@ func _process_controls(delta: float) -> void:
 				_melee({}, 1.0)
 			"food", "med":
 				if action_pressed("fire"):
-					player.consume(held)
+					player.consume(held,bag.active)
 					action_lock = 0.42
 			"build", "device":
 				if action_pressed("fire"):
 					var hit := _trace(5.6, 3)
 					if not hit.is_empty():
-						construction.place(construction.target_position(hit), held, shape, turn, player.global_position)
+						construction.place(construction.target_position(hit), held, shape, turn, player.global_position,bag.active)
 						action_lock = 0.28
 			"vehicle":
 				if action_pressed("fire"):
-					_place_vehicle(held)
+					_place_vehicle(held,bag.active)
 
 func alternate_uses_offhand() -> bool:
 	var id:=bag.current()
@@ -701,8 +707,22 @@ func weapon_hit(from:Vector3, to:Vector3, excluded:Array[RID])->Dictionary:
 	return hit
 
 func _trace(length: float, mask: int, water: bool = false, nature := false, weapon := false) -> Dictionary:
-	var from := player.camera.global_position
+	var from := player.action_origin()
+	var ray := _aim_direction(from, length, mask, water, nature, weapon)
+	return _trace_from(from, ray, length, mask, water, nature, weapon)
+
+func _aim_direction(origin: Vector3, reach: float, mask: int, water: bool, nature: bool, weapon: bool) -> Vector3:
+	var eye := player.camera.global_position
 	var ray := -player.camera.global_basis.z
+	if not player.third_person or eye.is_equal_approx(origin): return ray
+	# The shoulder camera picks the crosshair target. Reach and cover are resolved from the survivor.
+	var distance := reach + eye.distance_to(origin)
+	var sight := _trace_from(eye, ray, distance, mask, water, nature, weapon)
+	var target: Vector3 = sight.get("position", eye + ray * distance)
+	var toward := target - origin
+	return toward.normalized() if toward.dot(ray) > 0.0 else ray
+
+func _trace_from(from: Vector3, ray: Vector3, length: float, mask: int, water: bool, nature: bool, weapon: bool) -> Dictionary:
 	var exclusions: Array[RID] = [player.get_rid()]
 	if is_instance_valid(player.mount_vehicle):
 		exclusions.append(player.mount_vehicle.get_rid())
@@ -760,14 +780,20 @@ func _interaction_trace() -> Dictionary:
 	var lake_life := stream.lake_wildlife
 	if is_instance_valid(lake_life):
 		var eye := player.camera.global_position
-		var sight: Dictionary = lake_life.observation(eye, -player.camera.global_basis.z, observation_range)
+		var origin := player.action_origin()
+		var sight: Dictionary = lake_life.observation(eye, -player.camera.global_basis.z, observation_range + eye.distance_to(origin))
 		if not sight.is_empty() and not progress.records.has(_observation_key(sight.type, sight.get("morph", ""))):
+			if origin.distance_squared_to(sight.point) > observation_range * observation_range: return hit
 			var excluded: Array[RID] = [player.get_rid()]
 			if is_instance_valid(player.mount_vehicle):
 				excluded.append(player.mount_vehicle.get_rid())
+			var space := get_world_3d().direct_space_state
 			var ray := PhysicsRayQueryParameters3D.create(eye, sight.point, 1 | 2 | 8, excluded)
-			if get_world_3d().direct_space_state.intersect_ray(ray).is_empty():
-				return {"wildlife":sight}
+			if not space.intersect_ray(ray).is_empty(): return hit
+			if not origin.is_equal_approx(eye):
+				ray.from = origin
+				if not space.intersect_ray(ray).is_empty(): return hit
+			return {"wildlife":sight}
 	return hit
 
 func _discover_site(explorer: WastelandSurvivor) -> void:
@@ -813,7 +839,7 @@ func _update_prompt(held: String) -> void:
 	var juvenile := interaction.get("collider") as StaticBody3D
 	if is_instance_valid(juvenile) and juvenile.get_meta("kind","")=="sapling" and not is_instance_valid(player.mount_vehicle):
 		hint=grove.describe(juvenile)
-		if held=="shovel" and player.camera.global_position.distance_to(interaction.position)<=float(catalog.items.shovel.reach):
+		if held=="shovel" and player.action_origin().distance_to(interaction.position)<=float(catalog.items.shovel.reach):
 			hint+=" · [%s] 挖起树苗"%fire
 		return
 	if catalog.items.get(held,{}).get("kind","")=="sapling" and not is_instance_valid(player.mount_vehicle):
@@ -926,7 +952,7 @@ func _update_prompt(held: String) -> void:
 			"poi_wall":
 				if object.has_meta("timber_wall"):
 					var reach:=float(catalog.items.get(held,{}).get("reach",2.58))
-					if player.camera.global_position.distance_to(interaction.position)<=reach:
+					if player.action_origin().distance_to(interaction.position)<=reach:
 						var wall_type:="木墙" if object.get_meta("timber_wall") else "砌体墙"
 						if _uses_fists(held) or catalog.items.get(held,{}).get("kind","") in ["tool","weapon"]:
 							hint="%s · 按住[%s]拆墙"%[wall_type,fire]
@@ -1020,7 +1046,7 @@ func _use() -> void:
 		"note":
 			_open_for_player("note", object.get_meta("text"))
 		"crop":
-			construction.farm(object.get_meta("block"), bag.current())
+			construction.farm(object.get_meta("block"), bag.current(),bag.active)
 		"block":
 			var cell: Vector3i = object.get_meta("block")
 			var info: Dictionary = construction.blocks.get(cell, {})
@@ -1064,15 +1090,14 @@ func _draw_water(at:Vector3,filtered:bool)->bool:
 	notify("滤芯已更换 · 取得一份净水" if filtered else "取得生水 · 可在营火煮沸")
 	return true
 
-func draw_filtered_batch(at:Vector3, servings:int)->bool:
-	if replica or not bag.has_all({"composite_filter":1}): return false
-	var free_slots := maxi(0,bag.capacity()-bag.occupied())
-	if bag.count("composite_filter")%bag.stack_size("composite_filter")==1 and bag.occupied()<=bag.capacity(): free_slots+=1
-	var stack:=bag.stack_size("clean_water")
-	if free_slots*stack+posmod(-bag.count("clean_water"),stack)<servings:
+func draw_filtered_batch(at:Vector3, servings:int, source:=WastelandBag.ANY)->bool:
+	if replica or bag.source_count("composite_filter",source)<1: return false
+	var after_cost := WastelandBag.new(catalog,bag.snapshot())
+	after_cost.spend({"composite_filter":1},source)
+	if after_cost.room_for("clean_water")<servings:
 		notify("需要容纳 %d 份净水的背包空间，滤芯已保留"%servings)
 		return false
-	bag.spend({"composite_filter":1})
+	bag.spend({"composite_filter":1},source)
 	bag.add("clean_water",servings)
 	achievements.add("pump_water")
 	achievements.add("got_safe_water",servings)
@@ -1206,8 +1231,8 @@ func chest_key(peer:int=WastelandLan.HOST_ID)->String:
 func chest_view(key:String)->Dictionary:
 	return cache_inventory.view(self,key)
 
-func chest_move(key:String,action:String,item:String="",amount:int=1)->int:
-	return cache_inventory.move(self,key,action,item,amount)
+func chest_move(key:String,action:String,item:String="",amount:int=1,bag_slot:=WastelandBag.ANY)->int:
+	return cache_inventory.move(self,key,action,item,amount,bag_slot)
 
 func chest_close(key:String)->void:
 	if key==chest_key(actor_peer_id): chest_leave(actor_peer_id)
@@ -1234,14 +1259,17 @@ func _melee(item: Dictionary, power: float) -> void:
 	player.hand.swing_attack(power)
 	var hit := _trace(float(item.get("reach", 2.58)), 15, false, true, true)
 	if hit.is_empty():
-		audio.play_at("bow", player.camera.global_position + Vector3.FORWARD * 0.2, 0.17, false)
+		audio.play_at("bow", player.action_origin() + Vector3.FORWARD * 0.2, 0.17, false)
 		return
 	player.hit_stop=0.045
 	player.impact_kick=0.105
 	var amount := float(item.get("damage", 9.0)) * power * (1.0 + progress.rank("melee") * 0.17)
 	var punching: bool = _uses_fists(bag.current()) and item.get("kind", "") in ["", "material"]
-	if _strike_remains(hit,player.camera.global_position,amount): return
+	if _strike_remains(hit,player.action_origin(),amount): return
 	if hit.has("aquatic"):
+		# Water dampens an ordinary open-handed strike to a submerged animal.
+		if punching and power<=1.0 and (hit.kind=="lake_fish" or (hit.position.y<WastelandTerrainGen.WATER_LEVEL and stream.water_at(hit.position))):
+			amount *= 0.25
 		var landed := _strike_lake_wildlife(hit,amount,player,player.global_position,power>1.35 or item.get("bouncy",false),true)
 		if landed and punching and int(hit.get("hand_damage",0)) > 0:
 			player.hurt_hand(int(hit.hand_damage),"hard_impact")
@@ -1531,7 +1559,7 @@ func start_reload(id: String) -> void:
 	reload_id = id
 	reload_span = float(item.delay) * (1.0 - progress.rank("firearms") * 0.085)
 	reload_left = reload_span
-	audio.play_at("reload", player.camera.global_position + Vector3.DOWN * 0.22, 0.70, false)
+	audio.play_at("reload", player.action_origin() + Vector3.DOWN * 0.22, 0.70, false)
 
 func _tick_reload(delta: float) -> void:
 	if reload_id == "" or reload_id != bag.current():
@@ -1559,16 +1587,18 @@ func _shoot(id: String, item: Dictionary) -> void:
 		return
 	bag.set_loaded_rounds(id, loaded - 1)
 	action_lock = float(item.cooldown)
-	var origin := player.camera.global_position
+	var origin := player.action_origin()
 	var bow: bool = item.ammo == "arrow"
 	var aim:=player.camera.global_basis
+	var forward := _aim_direction(origin, player.camera.far, 15, false, false, true)
 	var spread:=player.shot_spread()*(0.55 if bow else 1.0)
 	var theta:=randf()*TAU
 	var radius:=sqrt(randf())*spread
-	var ahead:=(-aim.z+radius*(aim.x*cos(theta)+aim.y*sin(theta))).normalized()
+	var ahead:=(forward+radius*(aim.x*cos(theta)+aim.y*sin(theta))).normalized()
 	var speed := 62.0 if id=="field_crossbow" else 40.0 if bow else 122.0
 	var hit := float(item.damage) * (1.0 + progress.rank("firearms") * 0.14)
-	fx.projectile(origin + ahead * 0.19, ahead * speed, player, "arrow" if bow else "bullet", hit)
+	var launch := origin if player.third_person else origin + ahead * 0.19
+	fx.projectile(launch, ahead * speed, player, "arrow" if bow else "bullet", hit)
 	player.hand.recoil(not bow)
 	player.look(Vector2(randf_range(-0.015, 0.015), -0.029 if bow else -0.048))
 	audio.play_at("bow" if bow else "shot", origin + ahead * 0.5, 0.77 if bow else 1.14, false)
@@ -2077,9 +2107,9 @@ func show_shawl_caption(speaker_name: String, action_text: String, at: Vector3) 
 func discard_protected(id:String)->bool:
 	return bag.available_count(id)==1 and (bag.is_worn(id) or bag.current()==id or bag.offhand==id)
 
-func discard(id: String, allow_confirmation := true) -> void:
+func discard(id: String, allow_confirmation := true, source := WastelandBag.ANY) -> void:
 	var item:Dictionary=catalog.items.get(id,{})
-	if item.is_empty() or bag.count(id)<=0: return
+	if item.is_empty() or bag.source_count(id,source)<=0: return
 	if item.get("kind","")=="quest":
 		notify("任务物品已保护，不能丢弃")
 		return
@@ -2091,7 +2121,7 @@ func discard(id: String, allow_confirmation := true) -> void:
 			notify("这是正在使用的最后一件%s。再次丢弃以确认。"%catalog.title(id),3.2)
 			return
 	player.set_meta("discard_item","")
-	if not bag.spend({id:1}): return
+	if not bag.spend({id:1},source): return
 	var ammo: int = int(bag.magazine.get(id, 0))
 	var contents:Dictionary={id:1}
 	if bag.count(id) == 0 and ammo > 0 and item.has("ammo"):
@@ -2124,7 +2154,7 @@ func spawn_drop(at: Vector3, items: Dictionary, impulse:=Vector3.INF, discarded:
 	point.y = maxf(point.y, stream.ground_at(at) + 0.19)
 	fx.add_items(point,items,impulse,discarded,{},"",loose_material)
 
-func _place_vehicle(type: String) -> void:
+func _place_vehicle(type: String, source := WastelandBag.ANY) -> void:
 	var hit := _trace(5.5, 3, true)
 	if hit.is_empty() or bag.count(type) <= 0:
 		return
@@ -2147,7 +2177,7 @@ func _place_vehicle(type: String) -> void:
 	if not get_world_3d().direct_space_state.intersect_shape(probe, 1).is_empty():
 		notify("载具位置被占用")
 		return
-	if not bag.spend({type:1}):
+	if not bag.spend({type:1},source):
 		return
 	vehicle_serial += 1
 	var id := str(vehicle_serial)
@@ -2392,8 +2422,9 @@ func apply_ui_command(id: String, args: Array) -> void:
 		"swap_hands":
 			if args.is_empty(): bag.swap_hands()
 		"chest_take","chest_put":
-			if args.size()==3 and args[0] is String and args[1] is String and args[2] is int and args[2]>0:
-				chest_move(args[0],"take" if id=="chest_take" else "put",args[1],args[2])
+			if args.size() not in [3,4] or not args[0] is String or not args[1] is String or not args[2] is int or args[2]<=0: return
+			if args.size()==4 and not args[3] is int: return
+			chest_move(args[0],"take" if id=="chest_take" else "put",args[1],args[2],args[3] if args.size()==4 else WastelandBag.ANY)
 		"chest_all","chest_close":
 			if args.size()==1 and args[0] is String:
 				if id=="chest_close": chest_close(args[0])
@@ -2403,28 +2434,40 @@ func apply_ui_command(id: String, args: Array) -> void:
 		"assign":
 			if args.size()==1 and args[0] is String: bag.assign(args[0],bag.active)
 		"quick_equip":
-			if args.size()!=1 or not args[0] is String or bag.available_count(args[0])<=0: return
+			if args.size() not in [1,2] or not args[0] is String or bag.available_count(args[0])<=0: return
+			if args.size()==2 and (not args[1] is int or args[1]<=0): return
 			var item_id:String=args[0]
 			match catalog.items.get(item_id,{}).get("kind",""):
 				"armor":
 					if not bag.is_worn(item_id): _toggle_gear(item_id)
 				"weapon","ranged","tool","field_gear","light","sapling":
 					if bag.offhand==item_id and bag.available_count(item_id)==1: bag.swap_hands()
+					elif args.size()==2: bag.put_from_pack(item_id,bag.active,args[1])
 					else: bag.assign(item_id,bag.active)
 		"assign_slot":
 			if args.size()==2 and args[0] is String and args[1] is int and args[1]>=0 and args[1]<WastelandBag.HOTBAR_SIZE and bag.count(args[0])>0:
 				bag.assign(args[0],args[1])
+			elif args.size()==3 and args[0] is String and args[1] is int and args[2] is int:
+				if not bag.put_from_pack(args[0],args[1],args[2]): notify("快捷格无法放入这组物品")
+		"pack_slot":
+			if args.size()==2 and args[0] is int and args[1] is String and bag.source_count(args[1],args[0])>0:
+				if not bag.put_in_pack(args[0]): notify("背包已满")
+		"move_slot":
+			if args.size()==3 and args[0] is int and args[1] is int and args[2] is String and bag.source_count(args[2],args[0])>0:
+				bag.move_slot(args[0],args[1])
 		"consume":
-			if args.size()!=1 or not args[0] is String or bag.count(args[0])<=0:
-				return
+			if args.size() not in [1,2] or not args[0] is String or (args.size()==2 and not args[1] is int): return
+			var source: int = args[1] if args.size()==2 else WastelandBag.ANY
+			if bag.source_count(args[0],source)<=0: return
 			if catalog.items.get(args[0],{}).get("kind","")=="armor":
 				_toggle_gear(args[0])
 				notify(("已穿戴 " if args[0] in bag.gear.values() else "已脱下 ") + catalog.title(args[0]))
 			else:
-				player.consume(args[0])
+				player.consume(args[0],source)
 		"discard":
 			if args.size()==1 and args[0] is String: discard(args[0])
 			elif args.size()==2 and args[0] is String and args[1] is bool: discard(args[0],args[1])
+			elif args.size()==3 and args[0] is String and args[1] is bool and args[2] is int: discard(args[0],args[1],args[2])
 		"learn":
 			if args.size()==1 and args[0] is String and catalog.skills.has(args[0]) and progress.learn(args[0],catalog.skills[args[0]]):
 				notify("已学习 "+str(catalog.skills[args[0]].name))

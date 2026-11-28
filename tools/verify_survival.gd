@@ -290,6 +290,7 @@ func _water_route(config: Dictionary) -> void:
 	await physics_frame
 	var original_bag := session.bag
 	session.bag = WastelandBag.new(session.catalog, {"counts":{"scrap":3465, "clean_water":9}})
+	for slot in WastelandBag.HOTBAR_SIZE: session.bag.put_from_pack("scrap",slot,session.bag.stack_size("scrap"))
 	session._use()
 	_check(session.bag.count("clean_water") == 10 and session.fx.drop_records.shore_float.items.clean_water == 1 and not session.progress.records.has("salvage_buoy"), "partial salvage keeps unclaimed supplies and defers completion")
 	session._use()

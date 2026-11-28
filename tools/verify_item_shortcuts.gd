@@ -30,7 +30,7 @@ func run()->void:
 	app._enter_world(cfg,{},1,false)
 	var s:WastelandSession=app.session
 	s.set_physics_process(false)
-	for id:String in ["stone_axe","hardhat","bandage","beacon_log"]: s.bag.add(id,1)
+	for id:String in ["stone_axe","hardhat","bandage","beacon_log"]: s.bag.add(id,1,WastelandBag.PACK)
 	s.ui_command("slot",[s.bag.bar.find("")])
 	app.open_panel("bag")
 	await frames(10)
@@ -66,7 +66,7 @@ func run()->void:
 	s.ui_command("discard",["beacon_log"])
 	s.ui_command("discard",["beacon_log"])
 	check(s.bag.count("beacon_log")==1,"authority rejects a direct quest discard twice")
-	await click(gear_item(grid,"stone_axe"))
+	await click(gear_item(p.quick_slots,"stone_axe"))
 	await click(p.discard_button)
 	check(s.bag.count("stone_axe")==1 and p.discard_button.text.contains("确认"),"first discard warns in place")
 	app.close_overlay()
@@ -107,12 +107,25 @@ func run()->void:
 		check(heading.has_point(Vector2(grid_rect.get_center().x,heading.get_center().y))
 			and heading.end.y<=grid_rect.position.y,"%s heading appears above its own item grid"%side)
 	await tap_pair(panel.grids.chest,"fiber")
-	check(s.bag.count("fiber")==5 and not record.items.has("fiber"),"double tap takes exactly one physical stack")
+	check(s.bag.count("fiber")==5 and s.bag.pack_count("fiber")==0 and not record.items.has("fiber"),"double tap takes exactly one physical stack into a free quick slot")
+	await create_timer(0.2).timeout
+	await drag_item(gear_item(panel.grids.quick,"fiber"),panel.grids.bag.get_child(-1))
+	check(s.bag.pack_count("fiber")==5 and not s.bag.bar.has("fiber"),"dragging the quick stack back puts it in the backpack grid")
 	await create_timer(0.2).timeout
 	await tap_pair(panel.grids.bag,"fiber")
-	check(s.bag.count("fiber")==0 and record.items.fiber==5,"double tap returns the stack to its chest")
+	check(s.bag.count("fiber")==0 and record.items.fiber==5,"double tap returns the selected backpack stack to its chest")
+	await create_timer(0.2).timeout
+	var quick_index:=WastelandBag.HOTBAR_SIZE-1
+	await drag_item(gear_item(panel.grids.chest,"fiber"),panel.grids.quick.get_child(quick_index))
+	check(s.bag.bar[quick_index]=="fiber" and s.bag.bar_amounts[quick_index]==5 and s.bag.pack_count("fiber")==0,"dragging from the chest fills the specific quick slot")
+	s.bag.add("fiber",2,WastelandBag.PACK)
+	await create_timer(0.2).timeout
+	await tap_pair(panel.grids.quick,"fiber")
+	check(s.bag.pack_count("fiber")==2 and not s.bag.bar.has("fiber") and record.items.get("fiber")==5,"depositing the quick stack leaves matching backpack items intact")
+	s.bag.spend({"fiber":2},WastelandBag.PACK)
+	await create_timer(0.2).timeout
 	if not mobile:
-		for side:String in ["chest","bag"]:
+		for side:String in ["chest","quick"]:
 			var tile:=gear_item(panel.grids[side],"fiber")
 			var center:=tile.get_global_rect().get_center()
 			for down:bool in [true,false]:
@@ -125,7 +138,7 @@ func run()->void:
 				await frames()
 			await create_timer(0.2).timeout
 			check(s.bag.count("fiber")== (5 if side=="chest" else 0),"Shift-click transfers one visible stack from "+side)
-	s.bag.add("sledge",s.bag.capacity())
+	s.bag.add("sledge",s.bag.room_for("sledge"))
 	await create_timer(0.2).timeout
 	await click(gear_item(panel.grids.chest,"fiber"))
 	check(panel.single.disabled and panel.stack.disabled and panel.everything.disabled,"full destination disables unavailable transfers")

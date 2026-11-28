@@ -52,7 +52,7 @@ func _run() -> void:
 					if not Guide.GATHERING.has(kind) or found.has(kind): continue
 					var tool: String = WastelandSession.HARVEST_TOOLS.get(kind,"")
 					if tool!="": session.bag.add(tool,1)
-					session.bag.bar[session.bag.active] = tool
+					session.bag.assign(tool,session.bag.active)
 					var previous:=session.fx.drop_records.keys()
 					var bag_before:=session.bag.counts.duplicate()
 					session._harvest(body,1000.0,3,body.global_position)
@@ -67,7 +67,7 @@ func _run() -> void:
 				if found.size()==Guide.GATHERING.size(): break
 			if found.size()==Guide.GATHERING.size(): break
 	_check(found.size()==Guide.GATHERING.size(),"all seven gathering entries encountered")
-	session.bag.counts.clear()
+	session.bag.restore({})
 	_check(session.save_now(false)==OK,"saved world after spending collection")
 	var saved := WastelandSave.read(2)
 	app._enter_world(cfg,saved,2,false)

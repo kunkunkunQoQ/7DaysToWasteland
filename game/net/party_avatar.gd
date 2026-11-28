@@ -92,6 +92,13 @@ var offhand_blend:=0.0
 
 var preview_mainhand:=""
 var preview_loaded:=false
+var mainhand_kind := ""
+var aim_pitch := 0.0
+var carry_blend := 0.0
+var ranged_blend := 0.0
+var aim_stability := 0.0
+var arm_aim_pitch := 0.0
+var arm_travel := Vector3.ZERO
 var primary_shield:MeshInstance3D
 var motion_world: Node3D
 const GetUp := preload("res://game/actors/survivor_getup.gd")
@@ -102,11 +109,17 @@ var replica_ground_normal := Vector3.UP
 var active_motion: ActiveMotion
 var seat_vehicle: PhysicsBody3D
 var first_person_body := false
+var shadows_only := false
 
 func configure_live_motion(world: Node3D, first_person := false) -> void:
 	motion_world = world
 	first_person_body = first_person
-	if first_person_body and is_node_ready(): _shadow_meshes(self)
+	set_shadows_only(first_person)
+
+func set_shadows_only(enabled: bool) -> void:
+	if shadows_only == enabled: return
+	shadows_only = enabled
+	if is_node_ready(): _apply_body_visibility(self)
 
 func stop_live_motion() -> void:
 	if is_instance_valid(active_motion): active_motion.stop_driving()
@@ -194,11 +207,19 @@ func _physics_process(delta: float) -> void:
 	for garment in garment_motion:
 		garment.step(elapsed, garment_swimming)
 
-func _shadow_meshes(branch: Node) -> void:
-	if branch is GeometryInstance3D:
-		branch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+func _apply_body_visibility(branch: Node) -> void:
+	if branch is GeometryInstance3D: _apply_mesh_visibility(branch)
 	for mesh: GeometryInstance3D in branch.find_children("*","GeometryInstance3D",true,false):
+		_apply_mesh_visibility(mesh)
+
+func _apply_mesh_visibility(mesh: GeometryInstance3D) -> void:
+	if shadows_only:
+		if not mesh.has_meta(&"body_cast_shadow"):
+			mesh.set_meta(&"body_cast_shadow", mesh.cast_shadow)
 		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	elif mesh.has_meta(&"body_cast_shadow"):
+		mesh.cast_shadow = mesh.get_meta(&"body_cast_shadow")
+		mesh.remove_meta(&"body_cast_shadow")
 
 func set_mainhand(id:String,loaded:=false)->void:
 	preview_mainhand=id
@@ -207,13 +228,14 @@ func set_mainhand(id:String,loaded:=false)->void:
 	var model:="field_crossbow_empty" if id=="field_crossbow" and not loaded else id
 	if grip.get_meta("preview_model","?")==model: return
 	grip.set_meta("preview_model",model)
+	var definition := Offhand.item(id)
+	mainhand_kind = str(definition.get("kind",""))
 	primary_shield=null
 	var prop:=grip.get_node_or_null("PreviewMainhand") as MeshInstance3D
 	if prop:
 		grip.remove_child(prop)
 		prop.queue_free()
 	if id.is_empty(): return
-	var definition:=Offhand.item(id)
 	if definition.is_empty(): return
 	prop=MeshInstance3D.new()
 	prop.name="PreviewMainhand"
@@ -226,7 +248,7 @@ func set_mainhand(id:String,loaded:=false)->void:
 		prop.scale=Vector3.ONE
 		prop.rotation=Vector3.ZERO
 	grip.add_child(prop)
-	if first_person_body: _shadow_meshes(prop)
+	if shadows_only: _apply_body_visibility(prop)
 
 func set_offhand(id:String,blocking:=false,lit:=true)->void:
 	var changed:=id!=offhand_id
@@ -243,7 +265,7 @@ func set_offhand(id:String,blocking:=false,lit:=true)->void:
 		offhand_prop=Offhand.prop(id,false)
 		if offhand_prop:
 			left_grip.add_child(offhand_prop)
-			if first_person_body: _shadow_meshes(offhand_prop)
+			if shadows_only: _apply_body_visibility(offhand_prop)
 	if id=="torch" and is_instance_valid(offhand_prop): offhand_prop.get_node("LitGlass").visible=lit
 	Offhand.sync_world_light(left_grip,id,lit)
 	left_open.visible=id.is_empty()
@@ -734,7 +756,7 @@ func _dress() -> void:
 	if accessories.legs.is_empty(): _bind_garment(shorts_rig.get_child(0))
 	for piece in equipment.get_children(): _bind_garment(piece)
 	for piece in sleeves: _bind_garment(piece)
-	if first_person_body: _shadow_meshes(self)
+	if shadows_only: _apply_body_visibility(self)
 
 func _bind_garment(piece: Node) -> void:
 	if piece is MeshInstance3D and GarmentMotion.PROFILES.has(piece.name):
@@ -948,6 +970,11 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming := false,
 		jacket.rotation.x -= 0.09 * gait.fall_spread + 0.26 * gait.fall_brace + 1.15 * gait.landing
 		neck.rotation.x = -0.12 * gait.fall_spread - 0.29 * gait.fall_brace
 	offhand_blend=move_toward(offhand_blend,float(offhand_block),dt*5.5)
+	var arm_blend := 1.0-exp(-14.0*dt)
+	arm_travel = arm_travel.lerp(gait.local_velocity if walking else Vector3.ZERO,arm_blend)
+	carry_blend = lerpf(carry_blend,float(not mainhand_kind.is_empty() and not swimming),arm_blend)
+	ranged_blend = lerpf(ranged_blend,float(mainhand_kind=="ranged" and not swimming),arm_blend)
+	arm_aim_pitch = lerpf(arm_aim_pitch,clampf(aim_pitch,-0.95,0.95),arm_blend)
 	action_time+=dt
 	var duration:=0.68 if action_kind=="tool" else 0.24 if action_kind=="fire" else 0.44
 	if action_time>=duration: action_kind=""
@@ -957,17 +984,18 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming := false,
 	var progress:=clampf(action_time/duration,0,1)
 	var drive:=smoothstep(0.26,0.47,progress)*(1.0-smoothstep(0.52,1.0,progress))
 	var windup:=sin(PI*clampf(progress/0.42,0,1))
+	var recoil := smoothstep(0.0,0.16,progress)*(1.0-smoothstep(0.16,1.0,progress)) if action_kind=="fire" else 0.0
 	if swimming:
 		pivot.rotation.x=-0.85-strength*0.31
 		pivot.position.y=0.43+0.025*cos(stride)
 	else:
 		pivot.rotation.x=0
-	if not action_kind.is_empty(): jacket.rotation.y+=0.26*windup-0.32*drive
+	if action_kind in ["tool","punch"]: jacket.rotation.y+=0.26*windup-0.32*drive
 	var torso_anchor:=Vector3(0,0.975*jacket.scale.y,0)
 	jacket.position=Vector3(0,0.85*leg_ratio+0.125*jacket.scale.y,0)-jacket.basis.orthonormalized()*torso_anchor
 	for i in 2:
 		var side:float=-1 if i==0 else 1
-		var run:=smoothstep(4.3,7.2,foot_speed)
+		var run:=smoothstep(4.3,7.2,gait.speed if walking else foot_speed)
 		var phase:=stride+(PI if i==1 else 0.0)
 		var step:=sin(phase)*strength
 		var lifted:=maxf(0.0,-cos(phase))*strength
@@ -976,7 +1004,7 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming := false,
 		if walking:
 			gait.solve(i, pivot, legs[i], knees[i], ankle_joints[i])
 			# Sagittal swing reverses when backing up. A sidestep has a shorter fore-aft reach.
-			var forward := -gait.local_velocity.z / maxf(0.5, gait.local_velocity.length())
+			var forward := -arm_travel.z / maxf(0.5, arm_travel.length())
 			step = cos(TAU * (gait.phase + i * 0.5)) * strength * forward
 		else:
 			legs[i].rotation=Vector3(thigh,side*(0.080+duck_amount*0.04),side*(0.021+duck_amount*0.095))
@@ -984,7 +1012,7 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming := false,
 			ankle_joints[i].rotation=Vector3(-(thigh+knee_bend)*(1.0-0.54*lifted)-lifted*0.19,0,0)
 		arms[i].rotation=Vector3(0.045-step*(0.44+0.25*run)+duck_amount*0.16,side*(0.050+step*0.058),side*(0.039+duck_amount*0.084))
 		if walking:
-			arms[i].rotation.z += gait.local_velocity.x * (0.014 + side * cycle * 0.009)
+			arms[i].rotation.z += arm_travel.x * (0.014 + side * cycle * 0.009)
 		elbows[i].rotation=Vector3(0.14+0.27*strength+0.32*run+0.48*duck_amount+maxf(0,-step)*0.17,side*0.090,-side*0.11)
 		wrist_joints[i].rotation=Vector3(-0.061,-side*0.070,-side*0.07)
 		if swimming:
@@ -994,6 +1022,16 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming := false,
 			legs[i].rotation.x=0.15+0.28*stroke
 			knees[i].rotation.x=-0.20-0.28*maxf(0,-stroke)
 			ankle_joints[i].rotation.x=-0.44
+		elif i==1:
+			# Keep a carried grip near the torso while the empty arm counters the stride.
+			arms[i].rotation = arms[i].rotation.lerp(Vector3(0.22-0.09*step,0.12,0.05),carry_blend)
+			elbows[i].rotation = elbows[i].rotation.lerp(Vector3(0.65+0.04*strength,0.04,-0.07),carry_blend)
+			arms[i].rotation = arms[i].rotation.lerp(Vector3(0.53+arm_aim_pitch*0.63-0.046*step,0.27,0.04),ranged_blend)
+			elbows[i].rotation = elbows[i].rotation.lerp(Vector3(0.98+arm_aim_pitch*0.25,0.04,-0.06),ranged_blend)
+			wrist_joints[i].rotation.x += ranged_blend*(0.05+arm_aim_pitch*0.12)
+		elif offhand_id.is_empty():
+			arms[i].rotation = arms[i].rotation.lerp(Vector3(0.70+arm_aim_pitch*0.65,-0.60,-0.14),ranged_blend)
+			elbows[i].rotation = elbows[i].rotation.lerp(Vector3(0.98+arm_aim_pitch*0.23,-0.09,0.17),ranged_blend)
 		if not action_kind.is_empty():
 			if i==1:
 				match action_kind:
@@ -1004,10 +1042,10 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming := false,
 						arms[i].rotation+=Vector3(-0.29*windup+1.42*drive,0.23*drive,0.13*windup)
 						elbows[i].rotation.x+=0.92*windup-0.10*drive
 					"fire":
-						arms[i].rotation.x+=0.92*windup+0.5*drive
-						elbows[i].rotation.x+=0.48*windup
+						arms[i].rotation.x-=0.075*recoil
+						elbows[i].rotation.x+=0.17*recoil
 			else:
-				elbows[i].rotation.x+=0.63*(drive+windup)
+				elbows[i].rotation.x+=0.065*recoil if action_kind=="fire" else 0.63*(drive+windup)
 		if i==0 and not offhand_id.is_empty():
 			arms[i].rotation=Vector3(0.27+offhand_blend*0.50+step*0.065,-0.08+offhand_blend*0.23,-0.19)
 			elbows[i].rotation=Vector3(0.54+offhand_blend*0.33+0.30*float(offhand_id=="torch" and offhand_lit),0.06,0.09)
@@ -1025,4 +1063,14 @@ func _animate_pose(dt: float, foot_speed: float, duck: float, swimming := false,
 			wrist_joints[i].rotation.x -= 0.26 * brace
 		if i==1 and is_inside_tree() and is_instance_valid(primary_shield):
 			primary_shield.global_basis=global_basis*Basis(Vector3.UP,-0.68)
+	# The authored barrel points along -Z. Offset the raised forearm's rest pitch at the grip.
+	grip.rotation = Vector3(-1.46*ranged_blend,0.0,0.0)
+	aim_stability = 0.0
+	if ranged_blend>0.001 and is_inside_tree() and not swimming:
+		var aim_frame := global_basis.orthonormalized()*Basis(Vector3.RIGHT,arm_aim_pitch+0.09*recoil)
+		var wrist_frame := wrist_joints[1].global_basis.orthonormalized()
+		var mount := (wrist_frame.transposed()*aim_frame).get_rotation_quaternion()
+		var steady := 1.0-clampf(gait.fall_spread+gait.fall_brace+gait.landing*3.0,0.0,1.0) if walking else 1.0
+		aim_stability = ranged_blend*steady
+		grip.quaternion = grip.quaternion.slerp(mount,aim_stability*0.90)
 	sync_joint_skins()

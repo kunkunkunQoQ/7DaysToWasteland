@@ -7,6 +7,7 @@ const ActiveMotion := preload("res://game/actors/active_ragdoll.gd")
 var combat := LakeCombat.new()
 var drivers := {}
 var individual_fish := {}
+var ground_destinations := {}
 
 func weapon_hit(from: Vector3, to: Vector3) -> Dictionary:
 	return combat.weapon_hit(self, from, to)
@@ -17,8 +18,8 @@ func strike(hit: Dictionary, damage: float, origin: Vector3, heavy := false) -> 
 func combat_snapshot() -> Dictionary:
 	return combat.snapshot()
 
-func restore_combat(rows: Dictionary) -> void:
-	combat.restore(self, rows)
+func restore_combat(rows: Dictionary, play_hits := false) -> void:
+	combat.restore(self,rows,play_hits)
 
 const SCHOOL_SIZE := 6
 const FLIGHT_TIME := 3.6
@@ -286,11 +287,14 @@ func _process(delta: float) -> void:
 		nearby = nearby or in_range
 		patch.rings.visible = false
 		if not combat.absent(patch.heron_id):
+			var previous := patch.bird.global_position
 			_restore_targets(patch.heron_id)
 			_update_heron(patch, eyes, now)
 			patch.bird.position = combat.rejoin(patch.heron_id, patch.bird.position, now)
-			patch.bird.visible = stream.at_surface(patch.bird.position)
 			var on_bank := patch.wading and absf(patch.bird.position.y-stream.ground_at(patch.bird.position))<0.16
+			_follow_bank(patch.heron_id,patch.bird,previous,on_bank,patch.upper.planted_feet,step,0.50,0.0)
+			if now-patch.took_off>=0.0 and now-patch.took_off<=0.16: patch.flight_start=patch.bird.global_position
+			patch.bird.visible = stream.at_surface(patch.bird.position)
 			_drive(patch.heron_id,patch.upper.bones,patch.bird.visible,on_bank)
 		else:
 			patch.bird.hide()
@@ -310,17 +314,41 @@ func _process(delta: float) -> void:
 			animal.active_pose = false
 			continue
 		_restore_targets(id)
+		var previous := animal.global_position
 		animal.advance(stream,closest,now,step)
 		animal.position = combat.rejoin(id,animal.position,now)
+		var clearance := 0.094 if animal.species=="pond_turtle" else 0.005
+		var on_bed := animal.on_bottom and absf(animal.position.y-clearance-stream.ground_at(animal.position))<0.12
+		animal.grounded_speed = _follow_bank(id,animal,previous,on_bed,animal.planted_feet,step,0.70 if animal.species=="pond_turtle" else 1.25,clearance)
 		animal.visible = stream.at_surface(animal.position)
 		animal.active_pose = animal.visible
-		var on_bed := animal.species == "crayfish" and animal.tail_flick<0.40 and absf(animal.position.y-stream.ground_at(animal.position))<0.12
 		_drive(id,animal.bones,animal.active_pose,on_bed)
 	if not nearby:
 		countdown = 0.12 if not drivers.is_empty() else 0.4
 
 func _restore_targets(id: String) -> void:
 	if drivers.has(id): drivers[id].restore_targets()
+
+func _follow_bank(id: String, model: Node3D, previous: Vector3, grounded: bool, planted: Array[StringName], dt: float, speed_limit: float, clearance: float) -> float:
+	var drive: ActiveMotion = drivers.get(id)
+	if drive==null or dt<=0.0: return 0.0
+	if not grounded or not stream.at_surface(previous):
+		ground_destinations.erase(id)
+		drive.stop_ground_drive()
+		return 0.0
+	# The authored route asks for a velocity. Only the body's measured travel advances its target.
+	var destination := model.global_position
+	var last: Vector3 = ground_destinations.get(id,destination)
+	var desired := ((destination-last)/dt+(destination-previous)*2.4).slide(Vector3.UP).limit_length(speed_limit)
+	ground_destinations[id] = destination
+	model.global_position = previous
+	var floor_normal := stream.ground_normal_at(previous)
+	drive.set_ground_drive(desired,planted,dt,floor_normal)
+	var follow := drive.ground_follow_velocity(dt)
+	var foot := previous+follow*dt
+	foot.y = stream.ground_at(foot)+clearance
+	model.global_position = foot
+	return follow.length()
 
 func _drive(id: String, skeleton: Skeleton3D, simulation_ready: bool, grounded: bool) -> void:
 	var existing: Node3D = drivers.get(id)
@@ -342,6 +370,7 @@ func _drop_driver(id: String) -> void:
 func take_driver(id: String) -> ActiveMotion:
 	var rig: ActiveMotion = drivers.get(id)
 	drivers.erase(id)
+	ground_destinations.erase(id)
 	if individual_fish.has(id):
 		var fish: Dictionary = individual_fish[id]
 		if rig != null and fish.has("sync"):
@@ -407,6 +436,7 @@ func _drive_school(patch: Habitat) -> void:
 
 func _update_heron(patch: Habitat, eyes: Array[Vector3], now: float) -> void:
 	var elapsed := now - patch.took_off
+	var previous := patch.bird.position
 	if elapsed >= FLIGHT_TIME:
 		if patch.took_off > -99.0 and patch.perch!=patch.next_perch:
 			patch.perch = patch.next_perch
@@ -424,14 +454,15 @@ func _update_heron(patch: Habitat, eyes: Array[Vector3], now: float) -> void:
 			patch.bird.position.y = stream.ground_at(patch.bird.position)
 		var wade_yaw := atan2(-bank.x,-bank.z)+PI*(turn if outward else 1.0-turn)
 		patch.bird.rotation.y = lerp_angle(patch.flight_yaw,wade_yaw,smoothstep(FLIGHT_TIME,FLIGHT_TIME+0.95,elapsed))
+		var footing := previous if drivers.has(patch.heron_id) else patch.bird.position
 		for at in eyes:
-			if elapsed > FLIGHT_TIME + 1.0 and at.distance_squared_to(patch.bird.position) < 6.4 * 6.4:
+			if elapsed > FLIGHT_TIME + 1.0 and at.distance_squared_to(footing) < 6.4 * 6.4:
 				patch.next_perch = 1 - patch.perch
 				patch.took_off = now
-				patch.flight_start = patch.bird.position
+				patch.flight_start = footing
 				patch.takeoff_yaw = patch.bird.rotation.y
 				elapsed = 0.0
-				var direction := patch.perches[patch.next_perch] - patch.bird.position
+				var direction := patch.perches[patch.next_perch]-footing
 				patch.flight_yaw = atan2(-direction.x, -direction.z)
 				break
 	var flying := elapsed < FLIGHT_TIME

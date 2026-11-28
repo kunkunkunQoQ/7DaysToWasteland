@@ -9,6 +9,7 @@ const NECK_BEND := Vector3(0,1.27,-0.25)
 const HIP := Vector3(0,0.93,0.03)
 const BILL := Color("#bd995f")
 var juvenile := false
+var planted_feet: Array[StringName] = []
 
 func build(young: bool, face: int, preview := false) -> void:
 	juvenile = young
@@ -87,6 +88,7 @@ func pose(now: float, phase: float, airborne: float, flap_phase: float, leg_tuck
 	var scan := sin(now*0.72+phase)*(1.0-reach)*ground_action
 	var step := smoothstep(2.9,3.4,strike)*(1.0-smoothstep(5.7,6.3,strike))*ground_action
 	var beat := lerpf(sin(flap_phase),0.36,flare)
+	planted_feet.clear()
 	var bend_angle := 0.49*crouch
 	# Shorten the two shanks symmetrically around the planted foot as the breast lowers.
 	var drop := 0.90*(1.0-cos(bend_angle))+0.174*sin(bend_angle)
@@ -101,6 +103,7 @@ func pose(now: float, phase: float, airborne: float, flap_phase: float, leg_tuck
 		var stride := now*3.0+phase+(PI if side==1 else 0.0)
 		var swing := step*sin(stride)
 		var lift := step*maxf(0,cos(stride))
+		if lift<0.10: planted_feet.append(&"FootL" if side<0 else &"FootR")
 		bend("Thigh"+suffix,-1.18*leg_tuck-bend_angle+0.37*swing-0.30*lift+0.14*reach+0.16*flare-breast_pitch*(1.0-leg_tuck))
 		bend("Shin"+suffix,-0.32*leg_tuck+2.0*bend_angle+0.74*lift)
 		bend("Foot"+suffix,-0.31*lift+0.88*leg_tuck-bend_angle-0.21*flare)

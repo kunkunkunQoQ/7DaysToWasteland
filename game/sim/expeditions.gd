@@ -73,7 +73,7 @@ static func use(s:Node,id:String)->void:
 			s.notify("山口预报 · 下一时段 %02d:00 起，%s"%[next_hour,WastelandCatalog.WEATHER[forecast]],5)
 		"well":
 			if s.bag.current()=="composite_filter":
-				s.draw_filtered_batch(points[id],6)
+				s.draw_filtered_batch(points[id],6,s.bag.active)
 				return
 			s.player.hydration=minf(100,s.player.hydration+34)
 			s.notify("已饮用驼站井水 · 水分 %d"%roundi(s.player.hydration))

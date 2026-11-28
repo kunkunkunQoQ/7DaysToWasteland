@@ -3,6 +3,7 @@ extends CharacterBody3D
 
 const Profiles := preload("res://game/core/survivor_profiles.gd")
 const SurvivorBody := preload("res://game/actors/survivor_ragdoll.gd")
+const ImpactResistance := preload("res://game/actors/impact_resistance.gd")
 enum RagdollMode { UPRIGHT, KNOCKED_DOWN, DEAD }
 signal ragdoll_changed(mode: int, impact: Vector3)
 signal ragdoll_struck(impact: Vector3, at: Vector3, bone: StringName)
@@ -15,13 +16,24 @@ var live_swing := 0
 var live_shot := 0
 var live_last_position := Vector3.INF
 var knockdown_left := 0.0
+var impact_load := Vector2.ZERO
 var fall_uncontrolled := false
 var fall_apex := -INF
 var fall_last := Vector3.INF
+var air_momentum := Vector3.INF
+var sole_normal := Vector3.ZERO
+var step_point := Vector3.INF
+var step_direction := Vector3.ZERO
+var step_wait := 0.0
 var owns_view := false
 var carried_bag: WastelandBag
 var camera_focus := Vector3.ZERO
 var camera_outward := Vector3.BACK
+const SHOULDER_OFFSET := Vector3(0.62, -0.12, 3.15)
+const CAMERA_CLEARANCE := 0.19
+var third_person := false
+var shoulder_fraction := 0.0
+var camera_probe := PhysicsShapeQueryParameters3D.new()
 var profile := "ranger"
 var session: Node3D
 var guarding:=false
@@ -87,8 +99,15 @@ var shawl_voice_after_ms := 0
 var shawl_sprint_distance := 0.0
 
 func configure(owner_session: Node3D, save: Dictionary, initial: Vector3, local_camera: bool = true, remote_profile: String = "ranger", initial_bag: WastelandBag = null) -> void:
+	# Moving platforms already contribute their actual surface motion through the supporting feet.
+	platform_floor_layers = 0
 	session = owner_session
 	owns_view = local_camera
+	third_person = local_camera and bool(session.options.display.get("third_person", false))
+	var camera_sphere := SphereShape3D.new()
+	camera_sphere.radius = CAMERA_CLEARANCE
+	camera_probe.shape = camera_sphere
+	camera_probe.collision_mask = 1 | 2 | 8
 	carried_bag = initial_bag if initial_bag != null else session.bag
 	var chosen: String = owner_session.options.appearance if local_camera else remote_profile
 	profile = chosen if Profiles.STATS.has(chosen) else "ranger"
@@ -114,7 +133,7 @@ func configure(owner_session: Node3D, save: Dictionary, initial: Vector3, local_
 		camera.make_current()
 	camera.add_child(hand)
 	hand.visible=local_camera
-	camera.add_child(headlamp)
+	eyes.add_child(headlamp)
 	headlamp.light_color = Color("#ffdfae")
 	headlamp.light_energy = 1.36
 	headlamp.spot_range = 25.0
@@ -128,6 +147,7 @@ func configure(owner_session: Node3D, save: Dictionary, initial: Vector3, local_
 	if save.has("wound_rng"):
 		wound_rng.state = int(save.wound_rng)
 	restore_vitals(save)
+	impact_load = save.get("impact_load",Vector2.ZERO)
 	body_temp = float(save.get("temp", body_temp))
 	bleed = float(save.get("bleed", 0.0))
 	infection = float(save.get("infection", 0.0))
@@ -145,9 +165,12 @@ func snapshot() -> Dictionary:
 		"crouch":crouch, "body_height":stand_shape.height, "eye_height":eyes.position.y, "torch_in_hand":torch_in_hand,
 		"provisions":Vector2(warm_drink_left,ration_left), "stamina": stamina, "hunger": hunger, "hydration": hydration, "temp": body_temp,
 		"bleed": bleed, "infection": infection, "fracture": fracture, "sprain": sprain, "wet": wet, "wound_rng": wound_rng.state,
-		"lamp": flashlight, "breath": breath}
+		"lamp": flashlight, "breath": breath, "impact_load":impact_load}
 
 func reset_water_state() -> void:
+	_stop_ground_drive()
+	air_momentum = Vector3.INF
+	sole_normal = Vector3.ZERO
 	swimming = false
 	wet_feet = false
 	submerged = false
@@ -248,9 +271,51 @@ func look(relative: Vector2) -> void:
 	eyes.rotation.x = pitch
 
 func update_optics(delta: float, aiming: bool) -> void:
+	if not is_knocked_down():
+		if third_person and not aiming:
+			var extension := lerpf(shoulder_fraction, 1.0, 1.0 - exp(-delta * 12.0))
+			shoulder_fraction = minf(_clear_shoulder_fraction(), extension)
+			camera.position = SHOULDER_OFFSET * shoulder_fraction
+		elif shoulder_fraction > 0.0:
+			shoulder_fraction = 0.0
+			camera.position = Vector3.ZERO
+		if owns_view and is_instance_valid(live_avatar):
+			live_avatar.set_shadows_only(not _shows_body())
 	if camera.current:
 		camera.fov = move_toward(camera.fov,29.2 if aiming and not is_knocked_down() else 76.0,delta*220.0)
-		hand.visible = not aiming and not is_knocked_down()
+		hand.visible = not _shows_body() and not aiming and not is_knocked_down()
+
+func _clear_shoulder_fraction() -> float:
+	var exclusions: Array[RID] = [get_rid()]
+	if is_instance_valid(mount_vehicle): exclusions.append(mount_vehicle.get_rid())
+	camera_probe.exclude = exclusions
+	camera_probe.transform = Transform3D(Basis.IDENTITY, eyes.global_position)
+	camera_probe.motion = eyes.global_basis * SHOULDER_OFFSET
+	var space := get_world_3d().direct_space_state
+	var limit := space.cast_motion(camera_probe)[0]
+	if limit < 1.0: return limit
+	# A cast ignores a shape it already overlaps, e.g. a low ceiling grazing the probe at eye level.
+	var ray := PhysicsRayQueryParameters3D.create(eyes.global_position, eyes.global_position + camera_probe.motion, camera_probe.collision_mask, exclusions)
+	ray.hit_from_inside = true
+	var hit := space.intersect_ray(ray)
+	if hit.is_empty(): return 1.0
+	return maxf(0.0, (eyes.global_position.distance_to(hit.position) - CAMERA_CLEARANCE) / SHOULDER_OFFSET.length())
+
+func _shows_body() -> bool:
+	return shoulder_fraction >= 0.20
+
+func read_view_input() -> void:
+	if owns_view and InputMap.has_action("toggle_view") and Input.is_action_just_pressed("toggle_view"):
+		third_person = not third_person
+		session.options.display.third_person = third_person
+		session.options.save_options()
+
+func action_origin() -> Vector3:
+	return eyes.global_position if third_person else camera.global_position
+
+func sync_view_lantern(secondary: String) -> void:
+	var lit := flashlight and not submerged and not is_knocked_down() and not _shows_body()
+	preload("res://game/art/offhand_art.gd").sync_world_light(eyes, secondary, lit, true)
 
 func is_knocked_down() -> bool:
 	return ragdoll_mode != RagdollMode.UPRIGHT
@@ -258,6 +323,7 @@ func is_knocked_down() -> bool:
 func set_live_avatar(avatar: WastelandPartyAvatar) -> void:
 	live_avatar = avatar
 	live_avatar.configure_live_motion(session, owns_view)
+	if owns_view: live_avatar.set_shadows_only(not _shows_body())
 
 func update_live_avatar(delta: float) -> void:
 	if not owns_view or is_knocked_down(): return
@@ -267,7 +333,8 @@ func update_live_avatar(delta: float) -> void:
 		avatar.apply_outfit(profile)
 		set_live_avatar(avatar)
 		add_child(avatar)
-	live_avatar.visible = not is_instance_valid(mount_vehicle)
+	var seated := is_instance_valid(mount_vehicle)
+	live_avatar.visible = not seated or _shows_body()
 	live_avatar.set_seat_vehicle(mount_vehicle)
 	if not live_avatar.visible:
 		live_avatar.pose(delta,0.0,0.0,false,Vector3.INF,false,Vector3.UP,true)
@@ -275,14 +342,17 @@ func update_live_avatar(delta: float) -> void:
 	live_avatar.apply_outfit(profile)
 	live_avatar.wear_loadout(carried_bag.gear)
 	var held := carried_bag.current()
+	live_avatar.aim_pitch = pitch
 	live_avatar.set_mainhand(held, int(carried_bag.magazine.get(held, 0)) > 0)
-	live_avatar.set_offhand(carried_bag.offhand, guarding, false)
+	live_avatar.set_offhand(carried_bag.offhand, guarding, flashlight and not submerged and _shows_body())
 	if hand.swing_serial != live_swing:
 		live_avatar.act("punch" if held.is_empty() else "tool")
 	if hand.shot_serial != live_shot: live_avatar.act("fire")
 	live_swing = hand.swing_serial
 	live_shot = hand.shot_serial
-	if session.replica:
+	if seated:
+		live_avatar.pose(delta,0.0,0.0,false,Vector3.INF,false,Vector3.UP,true)
+	elif session.replica:
 		var motion := Vector3.ZERO
 		if live_last_position.is_finite() and delta > 0.0:
 			var travel := global_position - live_last_position
@@ -291,15 +361,13 @@ func update_live_avatar(delta: float) -> void:
 	else:
 		pose_ground_motion(delta)
 	live_last_position = global_position
-	if is_instance_valid(live_avatar.active_motion) and hand.visible:
-		var camera_frame := camera.global_basis.orthonormalized().transposed()
-		hand.apply_hand_contacts(camera_frame * live_avatar.active_motion.limb_deviation(&"hand_r"),
-			camera_frame * live_avatar.active_motion.limb_deviation(&"hand_l"))
 
 func pose_ground_motion(delta: float) -> void:
 	var motion := get_real_velocity()
+	var normal := get_floor_normal() if is_on_floor() else sole_normal
+	var supported := normal.y > 0.0 or (step_point.is_finite() and step_wait > 0.0)
 	live_avatar.pose(delta, Vector2(motion.x, motion.z).length(), crouch, swimming, motion,
-		is_on_floor(), get_floor_normal() if is_on_floor() else Vector3.UP)
+		supported, normal if normal.y > 0.0 else Vector3.UP)
 
 func animate_hands(delta: float, light: float, pace: float) -> void:
 	var phase := -1.0
@@ -308,6 +376,15 @@ func animate_hands(delta: float, light: float, pace: float) -> void:
 		phase = gait.phase
 		pace = minf(3.0, gait.speed * 0.44) * gait.swing_strength
 	hand.animate(delta, pace, crouch, light, hit_stop, phase)
+	if not owns_view: return
+	var right := Vector3.ZERO
+	var left := Vector3.ZERO
+	if hand.visible and is_instance_valid(live_avatar) and live_avatar.visible and is_instance_valid(live_avatar.active_motion):
+		var rig := live_avatar.active_motion
+		var to_view := camera.global_basis.orthonormalized().transposed()
+		right = to_view * rig.hand_contact_offset(&"hand_r")
+		left = to_view * rig.hand_contact_offset(&"hand_l")
+	hand.apply_hand_contacts(right, left, delta)
 
 func sync_part_hit(impact: Vector3, at: Vector3, bone: StringName = &"") -> void:
 	if is_instance_valid(ragdoll_body):
@@ -343,8 +420,12 @@ func sync_ragdoll(mode: int, impact: Vector3, appearance: Dictionary = {}) -> vo
 		if mode == RagdollMode.KNOCKED_DOWN and owns_view: session.notify("被击倒了，正在起身", 1.5)
 
 func _set_ragdoll(mode: int, impact: Vector3, appearance: Dictionary = {}) -> void:
+	impact_load = Vector2.ZERO
+	_stop_ground_drive()
 	live_last_position = Vector3.INF
 	fall_last = Vector3.INF
+	air_momentum = Vector3.INF
+	sole_normal = Vector3.ZERO
 	if mode != RagdollMode.KNOCKED_DOWN:
 		fall_uncontrolled = false
 		if is_instance_valid(ragdoll_body): ragdoll_body.physics.watch_landing(false)
@@ -361,7 +442,8 @@ func _set_ragdoll(mode: int, impact: Vector3, appearance: Dictionary = {}) -> vo
 		if owns_view:
 			camera.top_level = false
 			camera.transform = Transform3D.IDENTITY
-			hand.show()
+			shoulder_fraction = 0.0
+			hand.visible = not third_person
 		knockdown_left = 0.0
 	else:
 		var contact: Vector3 = appearance.get("impact_at", Vector3.INF)
@@ -467,7 +549,7 @@ func update_ragdoll_camera(delta: float) -> void:
 	camera.fov = 76.0
 	hand.hide()
 	headlamp.hide()
-	preload("res://game/art/offhand_art.gd").sync_world_light(camera, "", false)
+	sync_view_lantern("")
 
 func _exit_tree() -> void:
 	if ragdoll_mode == RagdollMode.KNOCKED_DOWN and is_instance_valid(ragdoll_body):
@@ -491,10 +573,10 @@ func simulate(delta: float, controls: bool) -> void:
 	elif raised: guard_exhausted=true
 	var invert := -1.0 if session.options.display.invert_y else 1.0
 	if controls and not session.remote_actor:
+		read_view_input()
 		var stick := _stick_look()
 		look(stick * Vector2(2.7, 2.16 * invert) * delta)
 	var holding: String = session.bag.current()
-	update_optics(delta,controls and session.optics_active())
 	hand.set_gloves(session.bag.gear.hands=="work_gloves",session.bag.gear.hands=="meme_claws")
 	hand.hold(holding, session.catalog.items.get(holding, {}))
 	hand.set_loaded_arrow(int(session.bag.magazine.get(holding,0))>0)
@@ -510,7 +592,8 @@ func simulate(delta: float, controls: bool) -> void:
 	else:
 		_walk(delta, drive, controls)
 	if is_knocked_down(): return
-	submerged = wet_feet and camera.global_position.y < (0.035 if submerged else -0.065)
+	update_optics(delta,controls and session.optics_active())
+	submerged = wet_feet and eyes.global_position.y < (0.035 if submerged else -0.065)
 	breath = move_toward(breath, 0.0 if submerged else max_breath(), delta * (1.0 if submerged else 3.0))
 	_survival(delta)
 	if is_knocked_down(): return
@@ -520,7 +603,7 @@ func simulate(delta: float, controls: bool) -> void:
 	var secondary:String=session.bag.gear.get("offhand","")
 	if not session.remote_actor:
 		hand.set_offhand(secondary,bool(get("guarding")),flashlight and not submerged)
-		preload("res://game/art/offhand_art.gd").sync_world_light(camera,secondary,flashlight and not submerged)
+		sync_view_lantern(secondary)
 	hand.swimming = swimming
 	hand.search_ratio = session.loot_ratio if controls else 0.0
 	animate_hands(delta, session.atmosphere.sun_strength + (0.35 if headlamp.visible else 0.0),
@@ -529,7 +612,21 @@ func simulate(delta: float, controls: bool) -> void:
 	hit_stop=maxf(0.0,hit_stop-delta)
 
 func _walk(delta: float, drive: Vector2, controls: bool) -> void:
-	if is_on_floor() or swimming or not fall_last.is_finite() or global_position.distance_squared_to(fall_last) > 2.25:
+	var ground_rig: WastelandActiveRagdoll = live_avatar.active_motion if is_instance_valid(live_avatar) else null
+	var has_rig := is_instance_valid(ground_rig) and ground_rig.driving
+	var relocated := fall_last.is_finite() and global_position.distance_squared_to(fall_last) > 2.25
+	if relocated:
+		air_momentum = Vector3.INF
+		if has_rig:
+			ground_rig.follow_relocation()
+			live_avatar.gait.reset()
+	sole_normal = Vector3.ZERO
+	var sole_velocity := Vector3.ZERO
+	if not is_on_floor() and has_rig and not relocated:
+		sole_normal = ground_rig.landing_normal()
+		if sole_normal.y > 0.0: sole_velocity = ground_rig.landing_surface_velocity()
+	var grounded := is_on_floor() or sole_normal.y > 0.0
+	if grounded or swimming or not fall_last.is_finite() or relocated:
 		fall_apex = global_position.y
 	else:
 		fall_apex = maxf(fall_apex, global_position.y)
@@ -571,17 +668,52 @@ func _walk(delta: float, drive: Vector2, controls: bool) -> void:
 	if body_temp < 33.5:
 		speed *= 0.84
 	var direction := transform.basis * Vector3(drive.x, 0, drive.y)
-	velocity.x = move_toward(velocity.x, direction.x * speed, delta * 31.0)
-	velocity.z = move_toward(velocity.z, direction.z * speed, delta * 31.0)
-	var grounded := is_on_floor()
-	if grounded and not swimming and is_instance_valid(live_avatar) and is_instance_valid(live_avatar.active_motion):
-		velocity = live_avatar.active_motion.supported_velocity(velocity)
+	step_wait = maxf(0.0, step_wait - delta)
+	if step_point.is_finite() and (direction.dot(step_direction) < 0.2 or
+			step_wait == 0.0 or
+			(grounded and global_position.y >= step_point.y - 0.04) or (global_position - step_point).dot(step_direction) > 0.14):
+		step_point = Vector3.INF
+		if is_instance_valid(live_avatar): live_avatar.gait.stair_contact = Vector3.INF
+	var desired := direction * speed
+	if not session.stream.at_surface(global_position + desired * delta): desired = Vector3.ZERO
+	var airborne := not grounded and not step_point.is_finite() and not swimming
+	if swimming:
+		_stop_ground_drive()
+		velocity.x = move_toward(velocity.x, desired.x, delta * 31.0)
+		velocity.z = move_toward(velocity.z, desired.z, delta * 31.0)
+	elif airborne:
+		_clear_step_targets()
+		velocity = Vector3.ZERO
+		if has_rig:
+			ground_rig.set_airborne_drive()
+			velocity = ground_rig.airborne_follow_velocity(delta)
+	else:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if has_rig and live_avatar.getup == null:
+			live_avatar.gait.desired_travel = desired
+			var normal := get_floor_normal() if is_on_floor() else sole_normal
+			if normal.is_zero_approx(): normal = Vector3.UP
+			ground_rig.set_ground_drive(desired, live_avatar.gait.supporting_ankles(), delta, normal)
+			var follow := ground_rig.ground_follow_velocity(delta)
+			# A rising slope shortens horizontal travel in move_and_slide unless the follow motion is tangent already.
+			if grounded and normal.y > 0.48 and not step_point.is_finite():
+				velocity.y = -(normal.x * follow.x + normal.z * follow.z) / normal.y
+			velocity.x = follow.x
+			velocity.z = follow.z
 	if swimming or not controls:
 		jump_buffer = 0.0
 		ledge_grace = 0.0
 	else:
-		jump_buffer = 0.12 if session.action_pressed("jump") else maxf(0.0, jump_buffer - delta)
+		# A sprint stride can spend longer than a walking stride between loaded soles.
+		# Carry a toe-off tap to the next real foot contact.
+		if session.action_pressed("jump"):
+			jump_buffer = 0.22 if sprinting else 0.12
+		else:
+			jump_buffer = maxf(0.0, jump_buffer - delta)
 		ledge_grace = 0.09 if grounded else maxf(0.0, ledge_grace - delta)
+	var jump_speed := 5.7 if fracture <= 0.0 else 4.0
+	var jump_requested := not swimming and jump_buffer > 0.0 and ledge_grace > 0.0 and stamina >= 10.0
 	if swimming:
 		var surfacing := 1 if controls and session.action_held("jump") else 0
 		var diving := 1 if controls and session.action_held("crouch") else 0
@@ -591,47 +723,73 @@ func _walk(delta: float, drive: Vector2, controls: bool) -> void:
 		elif surfacing > diving:
 			swim_y = clampf((-1.06 * stature() - global_position.y) * 4.2, -1.5, 3.30)
 		velocity.y = move_toward(velocity.y, swim_y, delta * 9.6)
-	elif jump_buffer > 0.0 and ledge_grace > 0.0 and stamina >= 10.0:
+	elif jump_requested and has_rig and live_avatar.getup == null and ground_rig.try_ground_jump(jump_speed):
 		jump_buffer = 0.0
 		ledge_grace = 0.0
-		velocity.y = 5.7 if fracture <= 0.0 else 4.0
+		_clear_step_targets()
+		ground_rig.set_airborne_drive()
+		airborne = true
+		sole_normal = Vector3.ZERO
+		# The solver has received the takeoff impulse; its first airborne displacement arrives next tick.
+		velocity = ground_rig.motion()
 		stamina -= 8.0
 		session.record_shawl_action("跳了起来", self)
-	else:
+	elif step_point.is_finite() and ground_rig != null and ground_rig.supports_step(step_point, step_direction):
+		# Follow the planted leading foot vertically; the hip supplies all forward travel.
+		velocity.y = clampf((step_point.y + 0.035 - global_position.y) / maxf(0.001, delta), 0.0, 3.7)
+	elif not airborne:
 		velocity.y -= 18.0 * delta
 	if not session.stream.at_surface(global_position + Vector3(velocity.x,0,velocity.z) * delta):
 		velocity.x = 0.0
 		velocity.z = 0.0
-	var incoming := velocity
+	# The swept capsule can also be correcting an offset. Impact energy comes from body momentum.
+	var incoming := ground_rig.motion() if airborne and has_rig else velocity
 	var speed_before_landing := incoming.y
+	var requested_travel := velocity * delta
 	move_and_slide()
+	if has_rig and not swimming and get_slide_collision_count() > 0:
+		ground_rig.limit_blocked_travel((requested_travel - get_position_delta()).slide(Vector3.UP))
+	var landed := is_on_floor() or sole_normal.y > 0.0
 	fall_last = global_position
-	if not swimming and not is_on_floor() and speed_before_landing <= -9.0 and fall_apex - global_position.y >= 2.6 and not _fall_into_open_water():
-		_release_into_fall()
+	if not swimming and not landed and speed_before_landing <= -9.0 and fall_apex - global_position.y >= 2.6 and not _fall_into_open_water(incoming):
+		_release_into_fall(incoming)
 		return
-	if grounded and is_on_wall() and controls and not swimming and not submerged and not duck and crouch<0.10 and speed_before_landing<=0.0 and drive.y< -0.18:
+	if grounded and not step_point.is_finite() and controls and not swimming and not submerged and not duck and crouch<0.10 and speed_before_landing<=0.0 and drive.y< -0.18:
 		var enabled:bool=session.network.current_input().get("auto_step",true) if session.remote_actor else session.options.display.get("auto_step",true)
-		if enabled: _step_ledge(direction.normalized())
-	if is_on_floor() and not grounded and not swimming and speed_before_landing < -3.5:
-		hand.landing = clampf((-speed_before_landing - 3.5) / 9.0, 0.0, 1.0) * float(session.options.display.impact_motion)
-	if is_on_floor() and not grounded and not swimming and speed_before_landing < 0.0:
+		var advance := get_position_delta().dot(direction.normalized())
+		if enabled and (is_on_wall() or advance < minf(0.025, desired.length() * delta * 0.35)):
+			_step_ledge(direction.normalized())
+	# A sole may arrest the rig before the follower capsule sweeps into the floor.
+	if not swimming and landed and (air_momentum.is_finite() or airborne):
+		var impact_motion := air_momentum if air_momentum.is_finite() else incoming
+		if airborne and incoming.y < impact_motion.y: impact_motion = incoming
+		if impact_motion.y < -3.5:
+			hand.landing = clampf((-impact_motion.y - 3.5) / 9.0, 0.0, 1.0) * float(session.options.display.impact_motion)
 		var impact_speed := 11.8
 		var foot_contact := Vector3.INF
 		for index in get_slide_collision_count():
 			var hit := get_slide_collision(index)
 			var normal := hit.get_normal()
-			var closing_speed := -(incoming - hit.get_collider_velocity()).dot(normal)
+			var closing_speed := -(impact_motion - hit.get_collider_velocity()).dot(normal)
 			if normal.y >= 0.48 and closing_speed > impact_speed:
 				impact_speed = closing_speed
 				foot_contact = hit.get_position()
+		if sole_normal.y > 0.0:
+			var closing_speed := -(impact_motion - sole_velocity).dot(sole_normal)
+			if closing_speed > impact_speed:
+				impact_speed = closing_speed
+				foot_contact = global_position
+		air_momentum = Vector3.INF
 		if foot_contact.is_finite():
 			damage((impact_speed - 10.5) * 4.5, "fall", Vector3.INF, foot_contact)
 			if is_knocked_down(): return
+	else:
+		air_momentum = incoming if airborne and has_rig and not landed else Vector3.INF
 	if global_position.y < -42.0 and velocity.y < -12.0 and session.stream.below_terrain(global_position):
 		damage(200.0, "fall")
 	if sprinting:
 		stamina = maxf(0.0, stamina - delta * 13.6 * (1.0-session.bag.gear_bonus("run_saving")))
-		if is_on_floor() and shawl_sprint_distance < 8.0:
+		if landed and shawl_sprint_distance < 8.0:
 			var stride := get_position_delta()
 			shawl_sprint_distance += Vector2(stride.x, stride.z).length()
 			if shawl_sprint_distance >= 8.0: session.record_shawl_action("一口气跑了八米", self)
@@ -640,25 +798,25 @@ func _walk(delta: float, drive: Vector2, controls: bool) -> void:
 	if not sprinting: shawl_sprint_distance = 0.0
 	var travel := get_real_velocity()
 	var distance := Vector2(travel.x, travel.z).length()
-	if distance > 0.3 and (is_on_floor() or wet_feet):
+	if distance > 0.3 and (landed or wet_feet):
 		foot_distance += delta * distance
 		if foot_distance >= (2.45 if sprinting else 1.72):
 			foot_distance -= 2.45 if sprinting else 1.72
 			_footstep()
 
-func _fall_into_open_water() -> bool:
+func _fall_into_open_water(incoming: Vector3) -> bool:
 	var height := global_position.y - WastelandTerrainGen.WATER_LEVEL
 	if height < 0.0: return session.stream.water_at(global_position) and session.stream.ground_at(global_position) < -1.12
-	var time := (velocity.y + sqrt(velocity.y * velocity.y + 36.0 * height)) / 18.0
-	var entry := global_position + Vector3(velocity.x,0,velocity.z) * time
+	var time := (incoming.y + sqrt(incoming.y * incoming.y + 36.0 * height)) / 18.0
+	var entry := global_position + Vector3(incoming.x,0,incoming.z) * time
 	entry.y = WastelandTerrainGen.WATER_LEVEL
 	if not session.stream.water_at(entry) or session.stream.ground_at(entry) > entry.y - 1.12: return false
 	var ray := PhysicsRayQueryParameters3D.create(global_position,entry + Vector3.UP * 0.02,1|2|8,[get_rid()])
 	return get_world_3d().direct_space_state.intersect_ray(ray).is_empty()
 
-func _release_into_fall() -> void:
+func _release_into_fall(incoming: Vector3) -> void:
 	knockdown_left = 1.0
-	_set_ragdoll(RagdollMode.KNOCKED_DOWN, Vector3.ZERO, {"falling":true})
+	_set_ragdoll(RagdollMode.KNOCKED_DOWN, Vector3.ZERO, {"falling":true, "velocity":incoming})
 	if not is_instance_valid(ragdoll_body): return
 	fall_uncontrolled = true
 	var rig := ragdoll_body.physics
@@ -673,17 +831,34 @@ func _on_fall_contact(bone: StringName, at: Vector3, _normal: Vector3, speed: fl
 	if speed <= 11.8: return
 	damage((speed - 10.5) * 4.5, "fall", Vector3.INF, at, bone)
 
+func _stop_ground_drive() -> void:
+	_clear_step_targets()
+	if is_instance_valid(live_avatar) and is_instance_valid(live_avatar.active_motion):
+		live_avatar.active_motion.stop_ground_drive()
+
+func _clear_step_targets() -> void:
+	step_point = Vector3.INF
+	step_wait = 0.0
+	if not is_instance_valid(live_avatar): return
+	live_avatar.gait.desired_travel = Vector3.ZERO
+	live_avatar.gait.stair_contact = Vector3.INF
+
 func _step_ledge(direction:Vector3)->bool:
-	# Only climb a face actually hit this tick. A walkable slope needs no correction.
-	var face:KinematicCollision3D
+	if direction.is_zero_approx() or not is_instance_valid(live_avatar): return false
+	# The physical feet may meet a riser before the capsule reaches it.
+	var face: Object
 	for i in get_slide_collision_count():
 		var contact:=get_slide_collision(i)
 		if contact.get_normal().dot(direction)< -0.45 and absf(contact.get_normal().y)<0.48:
-			face=contact
+			face=contact.get_collider()
 			break
-	if not face: return false
-	var solid:=face.get_collider() as StaticBody3D
-	if not solid: return false
+	if not face:
+		var shin := global_position + Vector3.UP * 0.10
+		var probe := PhysicsRayQueryParameters3D.create(shin, shin + direction * (stand_shape.radius + 0.17), 1 | 2, [get_rid()])
+		var hit := get_world_3d().direct_space_state.intersect_ray(probe)
+		if hit.is_empty() or hit.normal.dot(direction) > -0.45 or absf(hit.normal.y) >= 0.48: return false
+		face = hit.collider
+	if not (face is StaticBody3D): return false
 	var limit:=0.63
 	var foot:=global_position
 	var stride:=stand_shape.radius+0.17
@@ -703,9 +878,11 @@ func _step_ledge(direction:Vector3)->bool:
 	if test_move(global_transform,lift): return false
 	var raised:=global_transform.translated(lift)
 	if test_move(raised,direction*stride): return false
-	global_position=center+lift
-	velocity.y=0.0
-	apply_floor_snap()
+	step_point = top.position
+	step_direction = direction
+	step_wait = 1.2
+	live_avatar.gait.stair_contact = step_point
+	live_avatar.gait.stair_direction = direction
 	return true
 
 func _footstep() -> void:
@@ -776,6 +953,9 @@ func _drive(delta: float, input: Vector2, controls: bool) -> void:
 func ride(vehicle: Node3D) -> void:
 	if is_knocked_down() or vehicle.record.get("needs_repair", false):
 		return
+	_stop_ground_drive()
+	air_momentum = Vector3.INF
+	sole_normal = Vector3.ZERO
 	mount_vehicle = vehicle
 	sprinting = false
 	shawl_sprint_distance = 0.0
@@ -972,12 +1152,18 @@ func damage(amount: float, source: String, origin := Vector3.INF, hit_at := Vect
 		_push_part(impact * 0.62, hit_at, hit_bone)
 
 func _knockdown_hit(source: String, loss: float) -> bool:
+	var strength := loss
 	match source:
-		"boar": return loss >= 7.0
-		"heavy": return loss >= 20.0
-		"rupture", "debris", "timber": return loss >= 15.0
 		"fall": return loss >= 18.0
-	return false
+		"heavy","rupture","debris","timber": strength *= 1.52
+		"boar": strength *= 1.22
+		"claw": strength *= 0.78
+		_: return false
+	var threshold := 29.0*sqrt(max_health()/100.0)
+	if fracture>0.0 or stamina<max_stamina()*0.18: threshold *= 0.9
+	var active: WastelandActiveRagdoll = live_avatar.active_motion if is_instance_valid(live_avatar) else null
+	impact_load = ImpactResistance.after_hit(impact_load,float(session.clock.elapsed),strength,threshold,active)
+	return impact_load.x>=1.0
 
 func _impact_velocity(source: String, loss: float, toward: Vector3) -> Vector3:
 	var away := -toward if toward.length_squared() > 0.01 else global_basis.z
@@ -1028,10 +1214,10 @@ func clear_damage_feedback() -> void:
 	pending_drain = 0.0
 	drain_time = 0.0
 
-func consume(id: String) -> void:
+func consume(id: String, source := WastelandBag.ANY) -> void:
 	var item: Dictionary = session.catalog.items.get(id, {})
 	var kind: String = item.get("kind", "")
-	if kind not in ["food","med"] or not session.bag.spend({id: 1}):
+	if kind not in ["food","med"] or not session.bag.spend({id: 1},source):
 		return
 	session.achievements.add("ate_"+id)
 	if id=="herbal_tea" and session.stream.generator.region_kind(position.x,position.z)=="alpine":
@@ -1046,7 +1232,7 @@ func consume(id: String) -> void:
 	fracture = maxf(0.0, fracture + float(item.get("fracture", 0.0)))
 	if float(item.get("fracture", 0.0)) < 0.0:
 		sprain = maxf(0.0, sprain + float(item.fracture))
-	session.audio.play_at("search", camera.global_position + Vector3.DOWN * 0.42, 0.49, false)
+	session.audio.play_at("search", eyes.global_position + Vector3.DOWN * 0.42, 0.49, false)
 	session.record_shawl_action("用掉了" + session.catalog.title(id), self)
 	var effect := " · 保暖 %d 秒" % ceili(warm_drink_left) if item.has("warm_seconds") else " · 耐力恢复提升 %d 秒" % ceili(ration_left) if item.has("energy_seconds") else ""
 	session.notify("已使用 " + session.catalog.title(id) + effect, 1.9)

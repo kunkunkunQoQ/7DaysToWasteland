@@ -15,6 +15,7 @@ const ACTIONS := {
 	"shape": ["切换建造形状", KEY_Q], "rotate": ["旋转方块", KEY_T],
 	"pause_game": ["暂停／返回", KEY_ESCAPE], "flashlight": ["开关提灯", KEY_L],
 	"swap_hands": ["主副手互换", KEY_F], "offhand_use": ["使用副手／持盾", KEY_V],
+	"toggle_view": ["切换第一／第三人称", KEY_F5],
 	"discard": ["丢弃所选物品", KEY_G], "slot_next": ["下个快捷栏", MOUSE_BUTTON_WHEEL_DOWN],
 	"slot_prev": ["上个快捷栏", MOUSE_BUTTON_WHEEL_UP],
 	"slot_1": ["快捷栏 1", KEY_1], "slot_2": ["快捷栏 2", KEY_2],
@@ -31,6 +32,7 @@ const PAD_BUTTONS := {
 	"journal": JOY_BUTTON_DPAD_DOWN, "shape": JOY_BUTTON_DPAD_LEFT,
 	"rotate": JOY_BUTTON_DPAD_RIGHT, "slot_prev": JOY_BUTTON_LEFT_SHOULDER,
 	"slot_next": JOY_BUTTON_RIGHT_SHOULDER,
+	"toggle_view": JOY_BUTTON_TOUCHPAD,
 }
 const PAD_AXIS := {
 	"up": [JOY_AXIS_LEFT_Y, -1.0], "down": [JOY_AXIS_LEFT_Y, 1.0],
@@ -41,7 +43,7 @@ const BUS := ["Master", "Effects", "Ambience", "Music"]
 const BUS_LABEL := ["主音量", "音效", "环境", "音乐"]
 
 var display := {"pixel_height": 510, "dynamic": true, "fps": 60, "radius": 4, "full": false, "show_fps": false,
-	"sensitivity": 0.003, "invert_y": false, "auto_step": true, "ui_softness": 0.47, "impact_motion": 0.75}
+	"sensitivity": 0.003, "invert_y": false, "auto_step": true, "ui_softness": 0.47, "impact_motion": 0.75, "third_person": false}
 var volumes := [0.84, 0.85, 0.62, 0.37]
 var bindings: Dictionary = {}
 var april_faces := false
@@ -99,6 +101,10 @@ func load_options(android_defaults := OS.has_feature("android")) -> void:
 			bindings[action]=code
 			taken[code]=true
 	for id in ACTIONS:
+		if id == "toggle_view" and not file.has_section_key("input", id):
+			var used := bindings.values()
+			used.erase(bindings[id])
+			while bindings[id] in used: bindings[id].y += 1
 		_apply_binding(id)
 	apply_audio()
 

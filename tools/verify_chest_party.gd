@@ -103,25 +103,25 @@ func exchange(is_host:bool) -> bool:
 	var peer:="guest" if is_host else "host"
 	flag(role+"opened")
 	if not check(await acknowledged(peer+"opened"),"both players see the opened chest"): return false
-	if not check(quantity("bag")== (3 if is_host else 0),"each panel opens on its owner's inventory"): return false
+	if not check(quantity("quick")== (3 if is_host else 0),"each panel opens on its owner's inventory"): return false
 	if not is_host and not check(await tap_stack("chest",true),"guest double taps the actual chest tile by finger"): return false
-	if not check(await until(func(): return quantity("chest")==0 and quantity("bag")==(3 if is_host else 6)),"guest receives all six wood while the host keeps its three"): return false
+	if not check(await until(func(): return quantity("chest")==0 and quantity("quick")==(3 if is_host else 6)),"guest receives all six wood while the host keeps its three"): return false
 	if not check(app.session.bag.bar.count("wood")==1,"each player's wood appears once on its own hotbar"): return false
 	flag(role+"received")
 	if not check(await acknowledged(peer+"received"),"both players received the empty chest"): return false
 	if is_host:
 		var token:String=app.network.joined_members()[0].token
 		if not check(await autosaved(app.session.chest_key(),token,3,6,0,""),"guest's pickup automatically saves both bags and the empty chest while both players are online"): return false
-	if is_host and not check(await tap_stack("bag",false),"host double clicks the real bag tile by mouse"): return false
-	if not check(await until(func(): return quantity("chest")==3 and quantity("bag")==(0 if is_host else 6)),"host deposits its three wood while the guest keeps its six"): return false
+	if is_host and not check(await tap_stack("quick",false),"host double clicks the real quick slot by mouse"): return false
+	if not check(await until(func(): return quantity("chest")==3 and quantity("quick")==(0 if is_host else 6)),"host deposits its three wood while the guest keeps its six"): return false
 	for stage:String in ["take","put"]:
-		var side:="chest" if stage=="take" else "bag"
+		var side:="chest" if stage=="take" else "quick"
 		flag(role+stage)
 		if not check(await acknowledged(peer+stage),"both panels ready for "+stage): return false
 		if not check(await press_one(side),"select actual tile and click "+stage+" one"): return false
 		var expected:=1 if stage=="take" else 3
 		var personal:=(0 if is_host else 6)+int(stage=="take")
-		if not check(await until(func(): return quantity("chest")==expected and quantity("bag")==personal),"both "+stage+" requests reconcile the chest and each player's bag"): return false
+		if not check(await until(func(): return quantity("chest")==expected and quantity("quick")==personal),"both "+stage+" requests reconcile the chest and each player's bag"): return false
 	return true
 
 func host() -> void:
@@ -148,10 +148,21 @@ func host() -> void:
 	var member:WastelandLan.MemberState=app.network.joined_members()[0]
 	member.survivor.invulnerable=300.0
 	member.bag.add("hardhat",1)
+	if "--slots-only" in OS.get_cmdline_user_args(): member.bag.add("wood",3,WastelandBag.PACK)
 	member.survivor.global_position=point
 	session._open_loot(body)
 	app.network._as_member(session,app.network.joined_members()[0],func(): session._open_loot(body))
 	if not check(await until(func(): return quantity("chest")==6),"host panel displays six wood"): return
+	if "--slots-only" in OS.get_cmdline_user_args():
+		if not check(await acknowledged("slotted"),"guest received a specified quick stack"): return
+		check(member.bag.pack_count("wood")==3 and member.bag.bar_amounts[6]==2 and session.bag.count("wood")==3,"host retains both peers' independent stack quantities")
+		check(await until(func():return member.survivor.third_person and member.survivor.camera.position.z>0.2,3000),"host simulates the guest's chosen over-shoulder viewpoint")
+		flag("inspected")
+		if not check(await acknowledged("returned"),"guest saw its partial deposit replicated"): return
+		check(member.bag.pack_count("wood")==3 and member.bag.bar_amounts[6]==1 and quantity("chest")==5,"one deposited unit left its exact guest slot")
+		flag("done")
+		await acknowledged("finished")
+		return
 	if not await exchange(true): return
 	if not check(await acknowledged("guestclosed"),"guest closed storage panel"): return
 	if not check(await until(func(): return session.chest_key(app.network.joined_members()[0].peer_id)=="" and session.chest_key()==key and model.opened),"guest close leaves host session and lid open"): return
@@ -180,7 +191,7 @@ func host() -> void:
 	session.player.global_position=body.global_position+Vector3.BACK
 	session._open_loot(body)
 
-	check(await until(func(): return quantity("chest")==2 and quantity("bag")==1,2000),"reopened disk save shows two wood in chest and one in the host bag")
+	check(await until(func(): return quantity("chest")==2 and quantity("quick")==1,2000),"reopened disk save shows two wood in chest and one in the host hotbar")
 	check(session.marker_records.any(func(row):return row.name==CHECKPOINT_MARKER),"normal reload restores the map marker alongside the chest and bags")
 	flag("reopened")
 	if not check(await acknowledged("rejoined"),"returning client confirms its saved backpack and helmet"): return
@@ -196,6 +207,20 @@ func host() -> void:
 func guest() -> void:
 	if not check(app.network.connect_to("127.0.0.1",port)==OK,"guest started ENet connection"): return
 	if not check(await until(func(): return quantity("chest")==6),"remote chest panel opens through RPC with six visible wood"): return
+	if "--slots-only" in OS.get_cmdline_user_args():
+		var session: WastelandSession=app.session
+		var key: String=panel().key
+		session.player.third_person=true
+		session.ui_command("chest_take",[key,"wood",2,6])
+		if not check(await until(func(): return quantity("quick")==2 and quantity("bag")==3 and quantity("chest")==4 and session.bag.bar[6]=="wood"),"guest receives chosen quick slot and keeps loose wood in its pack"): return
+		flag("slotted")
+		if not await acknowledged("inspected"): return
+		session.ui_command("chest_put",[key,"wood",1,6])
+		if not check(await until(func(): return quantity("quick")==1 and quantity("bag")==3 and quantity("chest")==5),"guest deposit updates the correct quick slot through ENet"): return
+		flag("returned")
+		await acknowledged("done")
+		flag("finished")
+		return
 	if not await exchange(false): return
 	app.close_overlay()
 	check(not app.panels.visible,"guest closed own panel")

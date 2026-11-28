@@ -16,6 +16,10 @@ var evade := Vector2.ZERO
 var active_pose := false
 var travel_speed := 0.0
 var tail_flick := 0.0
+var on_bottom := false
+var planted_feet: Array[StringName] = []
+var route_point := Vector3.INF
+var grounded_speed := 0.0
 
 func build(id: String, form: String, face := 0, preview := false) -> void:
 	species = id
@@ -119,11 +123,20 @@ func advance(stream: WastelandStream, observer: Vector3, now: float, delta: floa
 	var radius := 1.38 if turtle else 0.71
 	var next := anchor+Vector3(sin(cycle)*radius+evade.x,0,cos(cycle)*radius*0.67+evade.y)
 	var bed := stream.ground_at(next)
-	next.y = clampf(bed+1.20+sin(cycle*1.7)*0.28-alert*0.49,bed+0.30,-0.38) if turtle else bed+0.005
+	var was_grounded := on_bottom
+	if turtle:
+		var depth := WastelandTerrainGen.WATER_LEVEL-bed
+		on_bottom = depth<(0.47 if was_grounded else 0.36)
+		var swim_y := maxf(bed+0.10,minf(-0.38,bed+1.20+sin(cycle*1.7)*0.28-alert*0.49))
+		next.y = bed+0.094+maxf(0.0,swim_y-bed-0.094)*smoothstep(0.36,0.72,depth)
+	else:
+		on_bottom = true
+		next.y = bed+0.005
 	var velocity := Vector3(cos(cycle),0,-sin(cycle)*0.67)*radius*(0.25 if turtle else 0.17)
-	var tracking := active_pose and delta>0.0 and next.distance_to(position)<delta*4.0+0.13
-	if tracking: velocity = (next-position)/delta
-	travel_speed = velocity.length()
+	var tracking := active_pose and route_point.is_finite() and delta>0.0 and next.distance_to(route_point)<delta*4.0+0.13
+	if tracking: velocity = (next-route_point)/delta
+	route_point = next
+	travel_speed = grounded_speed if tracking and was_grounded else velocity.length()
 	var heading := Vector2(velocity.x,velocity.z)
 	var backwards := not turtle and alert>0.35 and travel_speed>0.24 and heading.dot(separation)>0.0
 	if backwards: heading = -heading
@@ -131,7 +144,7 @@ func advance(stream: WastelandStream, observer: Vector3, now: float, delta: floa
 	var target_yaw := atan2(-heading.x,-heading.y) if heading.length_squared()>0.0001 else current_yaw
 	var yaw := rotate_toward(current_yaw,target_yaw,delta*(4.2 if turtle else 7.3)) if tracking else target_yaw
 	var forward := Vector3(-sin(yaw),0,-cos(yaw))
-	if turtle:
+	if turtle and not on_bottom:
 		var pitch := clampf(atan2(velocity.y,maxf(0.03,heading.length())),-0.34,0.34)
 		var bank := 0.0
 		if tracking:
@@ -146,6 +159,7 @@ func advance(stream: WastelandStream, observer: Vector3, now: float, delta: floa
 	position = next
 	active_pose = true
 	animate(now,delta)
+	if not turtle and tail_flick>=0.40: on_bottom = false
 
 func _process(delta: float) -> void:
 	preview_time += delta
@@ -154,6 +168,7 @@ func _process(delta: float) -> void:
 	animate(preview_time,delta)
 
 func animate(now: float, delta: float) -> void:
+	planted_feet.clear()
 	var turtle := species == "pond_turtle"
 	var cadence := 2.8+alert*3.0 if previewing else minf(travel_speed*(7.8 if turtle else 48.0),10.5 if turtle else 15.0)
 	stroke = fmod(stroke+delta*cadence,TAU)
@@ -170,6 +185,13 @@ func animate(now: float, delta: float) -> void:
 			for rear in 2:
 				var beat := stroke+phase+PI*rear+(PI if side==1 else 0.0)
 				var suffix := ("L" if side<0 else "R")+str(rear)
+				if on_bottom:
+					var swing := smoothstep(0.015,0.22,travel_speed)
+					var lift := swing*maxf(0.0,cos(beat))
+					if lift<0.10: planted_feet.append(StringName("Paddle"+suffix))
+					bend("Arm"+suffix,0,side*0.43*sin(beat)*swing,side*(-0.34+0.43*lift))
+					bend("Paddle"+suffix,0,-side*0.17*sin(beat)*swing,side*(0.19-0.17*lift))
+					continue
 				bend("Arm"+suffix,0,side*lerpf(-0.38,sin(beat)*(0.72 if rear==0 else 0.56),glide),side*(0.05+glide*0.24*cos(beat)))
 				bend("Paddle"+suffix,glide*cos(beat-0.4)*0.41,side*(0.16+glide*0.47*sin(beat-0.92)),side*glide*0.28*cos(beat-0.85))
 	else:
@@ -190,6 +212,7 @@ func animate(now: float, delta: float) -> void:
 				var gait := stroke+phase+i*1.71+(PI if side<0 else 0.0)
 				var lift := walking*maxf(0.0,cos(gait))
 				var leg_id := suffix+str(i)
+				if lift<0.12: planted_feet.append(StringName("Shin"+leg_id))
 				bend("Leg"+leg_id,0,walking*side*0.38*sin(gait),side*(0.28*lift-0.04))
 				bend("Shin"+leg_id,0,-walking*side*0.12*sin(gait-0.62),side*(0.32*lift-0.08))
 	sync_head()

@@ -11,6 +11,12 @@ func _initialize() -> void:
 	_prepare.call_deferred()
 
 func _prepare() -> void:
+	if "--hotbar-only" in OS.get_cmdline_user_args():
+		WastelandSave.root_override = "user://verification/hotbar-%d" % OS.get_process_id()
+		_verify_quickbar(WastelandCatalog.new())
+		print("HOTBAR QA passed=%d failed=%d" % [passed, failures.size()])
+		quit(1 if not failures.is_empty() else 0)
+		return
 	visual = "--capture" in OS.get_cmdline_user_args() and DisplayServer.get_name() != "headless"
 	if "--compat-capture" in OS.get_cmdline_user_args():
 		output_dir+="/compatibility"
@@ -50,7 +56,7 @@ func _prepare() -> void:
 	var legacy_bag:={"counts":{"club":1,"frame":10,"bandage":2},"bar":["club","frame","bandage"],"active":1,"armor":"","magazine":{}}
 	var loaded_bag:=WastelandBag.new(session.catalog,legacy_bag)
 	_assert(loaded_bag.counts==legacy_bag.counts and loaded_bag.current()=="frame","existing survivor retains inventory and equipped shortcut")
-	_verify_quickbar(loaded_bag)
+	_verify_quickbar(session.catalog)
 	_assert(session.progress.records.has("first_axe_guide") and app.hud.toast.contains("地上的枯枝") and app.hud.toast.contains("伤手"),"fresh world shows the first gathering step")
 	app.open_panel("craft")
 	var axe_title:="%s ×1"%session.catalog.title("stone_axe")
@@ -87,9 +93,7 @@ func _prepare() -> void:
 	_assert(app.panels.visible and not session.controls_enabled, "backpack routes to gameplay overlay")
 	_assert(app.panels.item_grid.get_child_count()==27 and session.bag.capacity()==27,"an unequipped survivor has three rows of nine inventory cells")
 	if visual:
-		var original_counts:=session.bag.counts.duplicate()
-		var original_bar:=session.bag.bar.duplicate()
-		var original_automatic:=session.bag.automatic_shortcuts.duplicate()
+		var original_bag:=session.bag.snapshot()
 		for id in ["steel_axe","rifle","pistol","bow","arrow","fuel","medkit","generator","solar","boat","armor","seed_potato","beacon_log"]:
 			session.bag.add(id,2 if id=="arrow" else 1)
 		app.panels.selection="stone_axe"
@@ -97,9 +101,7 @@ func _prepare() -> void:
 		await _frames(4)
 		_assert(app.panels.quick_slots.get_global_rect().end.y<root.get_visible_rect().end.y,"backpack hotbar stays inside the viewport")
 		await _capture("04-inventory")
-		session.bag.counts=original_counts
-		session.bag.bar=original_bar
-		session.bag.automatic_shortcuts=original_automatic
+		session.bag.restore(original_bag)
 	app.open_panel("craft")
 	app.panels._filter_recipes("绷带")
 	_assert(app.panels.recipe_list.get_child_count() == 1, "crafting material and name search")
@@ -279,25 +281,34 @@ func _strike_resource() -> float:
 		await physics_frame
 	return cost
 
-func _verify_quickbar(bag: WastelandBag) -> void:
-	bag.spend({"club":1})
-	bag.add("wood",3)
-	bag.add("wood",4)
-	_assert(bag.bar[0]=="club" and bag.bar[3]=="wood" and bag.bar.count("wood")==1 and bag.count("wood")==7 and bag.current()=="frame","pickups stack once and preserve custom bindings and the selected slot")
-	bag.add("club",1)
-	_assert(bag.bar[0]=="club" and bag.bar.count("club")==1,"reacquired equipment uses its saved shortcut")
-	bag.assign("wood",5)
-	for id in ["stick","stone","fiber","cloth"]:
-		bag.add(id,1)
-	var full := bag.bar.duplicate()
-	bag.add("scrap",2)
-	_assert(not full.has("") and bag.bar==full and bag.count("scrap")==2,"a full hotbar sends the item to the bag without replacing shortcuts")
-	var restored:=WastelandBag.new(bag.catalog,bag.snapshot())
-	restored.spend({"wood":7,"stone":1})
-	restored.add("scrap",1)
-	_assert(restored.bar[5]=="wood" and restored.bar[full.find("stone")]=="scrap" and restored.count("scrap")==3,"depleted automatic shortcuts become available after loading while a manually moved shortcut stays reserved")
-	var packed:=WastelandBag.new(bag.catalog,{"counts":{"sledge":WastelandBag.STACK_SLOTS}})
-	_assert(packed.add("wood",1)==0 and not packed.bar.has("wood"),"a rejected pickup leaves the shortcut bar alone")
+func _verify_quickbar(catalog: WastelandCatalog) -> void:
+	var bag:=WastelandBag.new(catalog,{"counts":{"wood":105,"club":1},"bar":["wood","club","pistol"],"active":1})
+	_assert(bag.pack_count("wood")==6 and bag.bar_amounts[0]==99 and bag.occupied()==1 and bag.current()=="club" and bag.bar[2]=="","legacy shortcuts allocate real stacks, leave overflow in the pack and clear absent items")
+	_assert(bag.put_from_pack("wood",4,4) and bag.pack_count("wood")==2 and bag.bar_amounts[4]==4,"two quick slots can independently hold the same material")
+	_assert(bag.spend({"wood":1},4) and bag.bar_amounts[4]==3 and bag.pack_count("wood")==2 and bag.bar_amounts[0]==99,"using a quick stack takes from its own slot")
+	_assert(not bag.spend({"wood":4},4) and bag.count("wood")==104,"an insufficient selected stack never takes from another location")
+	bag.move_slot(4,1)
+	_assert(bag.current()=="wood" and bag.bar_amounts[1]==3 and bag.bar[4]=="club","moving between occupied quick slots swaps both actual stacks")
+	bag.spend({"wood":6})
+	_assert(bag.pack_count("wood")==0 and bag.bar_amounts[0]==95 and bag.bar_amounts[1]==3,"crafting takes loose pack stock before stowed and selected quick stacks")
+	_assert(bag.move_slot(1,0) and bag.bar_amounts[0]==98 and bag.bar[1]=="","matching quick stacks merge and free the source slot")
+	_assert(bag.put_in_pack(0) and bag.occupied()==1 and bag.pack_count("wood")==98 and bag.current()=="","returning a stack to the pack frees its quick slot")
+	_assert(bag.add("wood",1)==1 and not bag.bar.has("wood") and bag.pack_count("wood")==99,"subsequent pickups retain deliberately packed items")
+	bag.put_from_pack("wood",4,6)
+	_assert(bag.bar_amounts[4]==6 and bag.pack_count("club")==1 and bag.pack_count("wood")==93,"placing a different stack exchanges the displaced item back into the pack")
+	bag.add("wood",3,7)
+	var saved:=bag.snapshot()
+	var wrote:=WastelandSave.write(8,{"bag":saved,"settings":WastelandSave.default_world()})
+	var loaded:=WastelandBag.new(catalog,WastelandSave.read(8).get("bag",{}))
+	_assert(wrote==OK and loaded.snapshot()==saved,"world save and reload preserve duplicate quick stacks and loose pack stock")
+	var packed:=WastelandBag.new(catalog)
+	_assert(packed.add("sledge",40)==35 and packed.occupied()==27 and packed.bar_amounts.count(1)==8,"27 pack slots and eight independent quick slots accept exactly 35 unstackable items")
+	var full:=packed.snapshot()
+	_assert(packed.add("wood",1)==0 and not packed.put_in_pack(0) and packed.snapshot()==full,"full storage rejects pickups and returns without changing either inventory")
+	_assert(packed.spend({"sledge":1},7) and packed.add("bandage",1)==1 and packed.bar[7]=="bandage" and packed.occupied()==27,"a full pack can use a newly vacant quick slot without replacing another stack")
+	var crowded:=WastelandBag.new(catalog,{"counts":{"sledge":26,"wood":99,"stone":99},"bar":["stone"]})
+	var before:=crowded.snapshot()
+	_assert(not crowded.put_from_pack("wood",0,1) and crowded.snapshot()==before and crowded.put_from_pack("wood",0,99) and crowded.pack_count("stone")==99,"full pack swaps are atomic and can use the space released by the incoming stack")
 
 func _verify_first_axe() -> void:
 	var player := session.player

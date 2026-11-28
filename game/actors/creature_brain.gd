@@ -192,12 +192,12 @@ func _beam_reaches(player: WastelandSurvivor) -> bool:
 	var delta := _eyes() - lamp.global_position
 	return delta.length_squared() < lamp.spot_range * lamp.spot_range and (-lamp.global_basis.z).dot(delta.normalized()) >= cos(deg_to_rad(lamp.spot_angle)) and _clear_to(player, lamp.global_position, _eyes())
 
-func provoke(origin: Vector3) -> void:
+func provoke(origin: Vector3, interrupt_action := true) -> void:
 	_wake(origin)
 	if origin.is_finite():
 		_remember(origin, float(profile.memory))
 	sense_left = 0.0
-	_cancel_action()
+	if interrupt_action: _cancel_action()
 
 func tick(delta: float, player: WastelandSurvivor, teammates: Array[WastelandSurvivor], observer_range: float) -> Vector3:
 	if not is_instance_valid(seen):

@@ -98,7 +98,7 @@ func _regions() -> void:
 		check(result.get("collider") == area, "a physical ray picks the " + zone + " zone independently")
 	var before := actor.hp
 	actor.hit_zone("head", 3.0, at + Vector3.FORWARD)
-	check(is_equal_approx(before - actor.hp,6.0) and actor.brain.state in [STATE.STAGGER,STATE.KNOCKDOWN], "headshot doubles damage and interrupts movement")
+	check(is_equal_approx(before-actor.hp,6.0) and actor.hurt>0.0 and actor.brain.state not in [STATE.STAGGER,STATE.KNOCKDOWN],"a light headshot doubles damage and produces an upright reaction")
 	session.hordes.release(actor)
 	actor = _spawn("walker",at,at + Vector3.FORWARD,{"limb_index":0,"sleeping":true})
 	before = actor.hp
@@ -110,7 +110,7 @@ func _regions() -> void:
 	before = actor.hp
 	actor.hit_zone("legs",3.0,at)
 	actor.hit_zone("legs",3.0,at)
-	check(is_equal_approx(before - actor.hp,4.8) and is_equal_approx(actor.max_move_speed(),speed * 0.5) and is_equal_approx(actor.limp_left,3.5) and actor.brain.state == STATE.KNOCKDOWN, "two leg strikes knock down and halve speed for 3.5 seconds")
+	check(is_equal_approx(before-actor.hp,4.8) and is_equal_approx(actor.max_move_speed(),speed*0.5) and is_equal_approx(actor.limp_left,3.5) and actor.ragdoll==null,"two light leg strikes halve walking speed for 3.5 seconds while the infected remains upright")
 	actor.take_hit(999,at)
 	check(actor.active and actor.brain.state == STATE.DEAD and actor.hurtboxes.areas.head.collision_layer == 0, "the corpse persists with all hitboxes disabled")
 	actor.think(WastelandCreature.CORPSE_SECONDS-0.2,session.player)

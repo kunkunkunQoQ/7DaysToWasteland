@@ -181,7 +181,7 @@ func _action_verbs(s:WastelandSession)->Dictionary:
 	if is_instance_valid(target):
 		match str(target.get_meta("kind","")):
 			"sapling":
-				if held=="shovel" and s.player.camera.global_position.distance_to(s.interaction.position)<=float(s.catalog.items.shovel.reach):
+				if held=="shovel" and s.player.action_origin().distance_to(s.interaction.position)<=float(s.catalog.items.shovel.reach):
 					result.fire="挖起树苗"
 			"resource":
 				if kind in ["","material","tool","weapon"]: result.fire="采集"

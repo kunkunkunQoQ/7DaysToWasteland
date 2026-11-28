@@ -35,7 +35,7 @@ static func prop(id:String,first_person:bool,material:Material=null)->MeshInstan
 	if first_person: mesh_node.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return mesh_node
 
-static func sync_world_light(parent:Node3D,id:String,lit:bool)->void:
+static func sync_world_light(parent:Node3D,id:String,lit:bool,at_eyes:=false)->void:
 	var light:=parent.get_node_or_null("OffhandLanternLight") as OmniLight3D
 	var on:=id=="torch" and lit
 	if light==null:
@@ -48,5 +48,5 @@ static func sync_world_light(parent:Node3D,id:String,lit:bool)->void:
 		light.omni_attenuation=1.25
 		light.shadow_enabled=false
 		parent.add_child(light)
-		light.position=Vector3(-0.28,-0.20,-0.4) if parent is Camera3D else Vector3.DOWN*0.16
+		light.position=Vector3(-0.28,-0.20,-0.4) if at_eyes or parent is Camera3D else Vector3.DOWN*0.16
 	light.visible=on

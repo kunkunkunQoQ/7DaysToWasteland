@@ -195,8 +195,8 @@ func preview(hit: Dictionary, item: String, shape: int, rotation_step: int, play
 		preview_cache = key
 	ghost.set_shader_parameter("valid", can_place(cell, player, item))
 
-func place(cell: Vector3i, item: String, shape: int, rotation_step: int, player: Vector3) -> bool:
-	if not can_place(cell, player, item) or not session.bag.spend({item: 1}):
+func place(cell: Vector3i, item: String, shape: int, rotation_step: int, player: Vector3, source := WastelandBag.ANY) -> bool:
+	if not can_place(cell, player, item) or not session.bag.spend({item: 1},source):
 		return false
 	var device := item if item != "frame" else ""
 	blocks[cell] = {
@@ -646,7 +646,7 @@ func remove_plot(cell: Vector3i) -> void:
 		crop_nodes.erase(cell)
 	if not harvest.is_empty(): session.drop_materials(at,harvest)
 
-func farm(cell: Vector3i, id: String) -> void:
+func farm(cell: Vector3i, id: String, source := WastelandBag.ANY) -> void:
 	if not crops.has(cell):
 		return
 	var row: Dictionary = crops[cell]
@@ -655,7 +655,7 @@ func farm(cell: Vector3i, id: String) -> void:
 		session.award({crop: 3 + session.progress.rank("harvest"), row.seed: 1}, position_of(cell))
 		row.seed = ""
 		session.gain(26, "farm")
-	elif row.seed == "" and session.catalog.items.get(id, {}).get("kind") == "seed" and session.bag.spend({id: 1}):
+	elif row.seed == "" and session.catalog.items.get(id, {}).get("kind") == "seed" and session.bag.spend({id: 1},source):
 		row.seed = id
 		row.when = session.clock.hours
 		session.gain(6, "farm")

@@ -14,12 +14,15 @@ static func support(a: WastelandCreature) -> void:
 	var scale_y := a.rig.scale.y
 	var normal := a.motion_floor_normal
 	var slope := Quaternion(Vector3.UP,normal)
+	var stride_axis := a.stride_axis(a.global_basis)
 	if prone:
 		a.rig.quaternion = slope*a.rig.quaternion
 		a.rig.position = slope*a.rig.position
 	else:
 		var load := maxf(a.windup,a.attack)
 		a.rig.position.y -= (0.035+moving*(0.065+running*0.088)+load*0.045)*scale_y
+		if a.limb_damage.z > 0 and a.limb_damage.w > 0:
+			a.rig.position.y -= 0.08 * scale_y
 		a.rig.position.y -= minf(0.15,Vector2(normal.x,normal.z).length()*0.27)*scale_y
 		a.rig.position.x = (sin(a.pose_phase)*moving*0.022+signi(a.limb_damage.z-a.limb_damage.w)*0.034)*a.rig.scale.x
 	for i in 2:
@@ -33,7 +36,7 @@ static func support(a: WastelandCreature) -> void:
 			var arm := a.skeleton.find_bone("arm"+suffix)
 			var shoulder := a.rig.transform*a.skeleton.get_bone_global_pose(arm).origin
 			var severity := a.limb_damage[i]
-			var target := shoulder + Vector3(side*0.053*a.rig.scale.x,0,along*step-0.055*a.rig.scale.z)
+			var target := shoulder + Vector3(side*0.053*a.rig.scale.x,0,-0.055*a.rig.scale.z) + stride_axis*along*step
 			target.y = (0.052+0.095*lift)*scale_y
 			if severity > 0:
 				target.y = (0.024+0.051*lift)*scale_y
@@ -41,11 +44,12 @@ static func support(a: WastelandCreature) -> void:
 			var grip := a.type == "brute" and not a.biting() and i == (0 if a.limb_damage.y > 0 else 1)
 			if grip:
 				target.y += 0.115*scale_y
-			if not a.biting() and (a.type == "crawler" or i == (0 if a.limb_damage.y > 0 else 1)):
+			var striking := not a.biting() and (a.type == "crawler" or i == (0 if a.limb_damage.y > 0 else 1))
+			if striking:
 				target += Vector3(0,a.windup*0.15+a.attack*0.08,-a.attack*0.21)*scale_y
-			if severity == 0:
-				var reaching := a.windup > 0.03 or a.attack > 0.03
-				target = a.foot_contacts.target(i, a.global_transform, target, not reaching and (cycle < stance or moving < 0.01), 1.0 if reaching else swing, 0.24 * scale_y)
+			var reaching := striking and (a.windup > 0.03 or a.attack > 0.03)
+			var support_bone := StringName(("hand" if severity == 0 else "elbow")+suffix)
+			target = a.foot_contacts.target(i, support_bone, a.global_transform, target, not reaching and (cycle < stance or moving < 0.01), 1.0 if reaching else swing, 0.24 * scale_y)
 			target.y = _surface_y(target,normal)
 			_reach(a,"arm"+suffix,"elbow"+suffix,"hand"+suffix,target,Vector3(side*0.82,0.30,0.95),0.55 if severity == 2 else 1.0)
 			if severity == 0:
@@ -54,12 +58,15 @@ static func support(a: WastelandCreature) -> void:
 				var damage := a.limb_damage[2+i]
 				var remaining := 1.0 if damage == 0 else 0.87 if damage == 1 else 0.52
 				var toe := Vector3(side*0.210,0.066 if damage == 0 else 0.025,0.525-(1.0-remaining)*0.349)*a.rig.scale
-				toe.z -= along*step*0.72
+				toe -= stride_axis*along*step*0.72
 				toe.y += maxf(0.0,sin(TAU*cycle))*0.065*moving*scale_y
+				var heel := StringName(("ankle" if damage == 0 else "knee")+suffix)
+				toe = a.foot_contacts.target(2+i, heel, a.global_transform, toe, cycle >= 0.5 or moving < 0.01, minf(1.0,cycle*2.0), 0.19*scale_y)
 				toe.y = _surface_y(toe,normal)
 				_reach(a,"leg"+suffix,"knee"+suffix,"ankle"+suffix,toe,Vector3(side*0.30,-0.48,-1.0),remaining)
 				_level_tip(a,"ankle"+suffix,0.10*lift)
-		elif a.limb_damage[2+i] == 0:
+		elif a.limb_damage[2+i] == 0 or (a.limb_damage.z > 0 and a.limb_damage.w > 0):
+			var stump := a.limb_damage[2+i] > 0
 			var leg := a.skeleton.find_bone("leg"+suffix)
 			var hip_x := a.skeleton.get_bone_rest(leg).origin.x
 			var pitch := 0.0
@@ -70,13 +77,15 @@ static func support(a: WastelandCreature) -> void:
 				pitch = lerpf(-0.43,0.25,smoothstep(0.0,0.9,swing))
 			pitch *= moving
 			var sole_y := 0.089*cos(pitch)+maxf(0.075*sin(pitch),-0.197*sin(pitch))
+			if stump: sole_y = 0.019
 			var height := 0.096+running*0.10+(0.07 if a.motion_water else 0.0)
 			var target := Vector3(hip_x+side*0.013,sole_y+lift*height,side*0.016)*a.rig.scale
-			target.z += along*step
-			target = a.foot_contacts.target(i, a.global_transform, target, cycle < stance or moving < 0.01, swing, 0.30 * scale_y)
+			target += stride_axis*along*step
+			var support_bone := StringName(("knee" if stump else "ankle")+suffix)
+			target = a.foot_contacts.target(i, support_bone, a.global_transform, target, cycle < stance or moving < 0.01, swing, 0.30 * scale_y)
 			target.y = _surface_y(target,normal)
-			_reach(a,"leg"+suffix,"knee"+suffix,"ankle"+suffix,target,Vector3(side*0.10,0,-1))
-			_level_tip(a,"ankle"+suffix,pitch)
+			_reach(a,"leg"+suffix,"knee"+suffix,"ankle"+suffix,target,Vector3(side*0.10,0,-1),0.95 if stump else 1.0)
+			if not stump: _level_tip(a,"ankle"+suffix,pitch)
 
 static func _surface_y(target: Vector3, normal: Vector3) -> float:
 	return (target.y-normal.x*target.x-normal.z*target.z)/maxf(normal.y,0.35)

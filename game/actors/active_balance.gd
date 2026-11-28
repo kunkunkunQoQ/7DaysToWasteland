@@ -57,10 +57,14 @@ func setup(rig: Node3D, crawling: bool) -> void:
 		feet = [&"shinl0",&"shinr0",&"shinl1",&"shinr1",&"shinl2",&"shinr2",&"shinl3",&"shinr3"]
 		_duration = 0.32
 		_weight = 0.65
+	elif index.has(&"shell"):
+		feet = [&"paddlel0",&"paddler0",&"paddlel1",&"paddler1"]
+		_weight = 0.52
 	elif not index.has(&"hips"):
 		feet = []
-		_weight = 0.52 if index.has(&"shell") else 0.74
+		_weight = 0.74
 	elif not rig._model is WastelandPartyAvatar:
+		feet = [&"ankle_l" if index.has(&"ankle_l") else &"knee_l",&"ankle_r" if index.has(&"ankle_r") else &"knee_r"]
 		_weight = 0.82
 		_duration = 0.73
 	var frame: Transform3D = rig._model.global_transform.orthonormalized().affine_inverse()
@@ -220,6 +224,10 @@ func step_offset(side: int) -> Vector3:
 
 func frequency_scale(i: int) -> float:
 	return 1.0-0.62*_yield[i]
+
+func impact_weight(i: int) -> float:
+	var parent: int = _rig._parts[i].parent
+	return maxf(_yield[i], _yield[parent] if parent >= 0 else 0.0)
 
 func target(i: int, goal: Transform3D) -> Transform3D:
 	if _remaining<=0.0 and stepping_foot<0: return goal

@@ -14,6 +14,7 @@ var ground_visual: MeshInstance3D
 var water: MeshInstance3D
 var region: NavigationRegion3D
 var navigation_data: Dictionary
+var traction_cache := {}
 var instances: Dictionary = {}
 var timber_visuals: Dictionary = {}
 var standing_trees: Dictionary = {}
@@ -189,6 +190,7 @@ func sync_cache(key: String, animate := true) -> void:
 	model.show_state(state,animate)
 
 func update_ground(data: Dictionary) -> void:
+	traction_cache.clear()
 	navigation_data = {"points": data.points, "nav": data.nav, "floor_faces": data.arrays[Mesh.ARRAY_VERTEX]}
 	var ground := ArrayMesh.new()
 	ground.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, data.arrays)

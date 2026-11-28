@@ -153,13 +153,18 @@ func _update_impact_vignette() -> void:
 	var level := Vector2.ZERO
 	if is_instance_valid(session) and is_instance_valid(session.player) and not session.death_screen and not session.simulation_paused:
 		var player := session.player
-		if player.submerged != (player.camera.environment == submerged_env):
-			player.camera.environment = submerged_env if player.submerged else null
-			session.atmosphere.distant_basin.visible = not player.submerged
-			pixel_paint.set_shader_parameter("underwater", player.submerged)
-			session.audio.set_underwater(player.submerged)
+		var underwater := player.submerged
+		if player.third_person or player.is_knocked_down():
+			var camera_at := player.camera.global_position
+			var waterline := 0.035 if player.camera.environment == submerged_env else -0.065
+			underwater = camera_at.y < waterline and session.stream.water_at(camera_at)
+		if underwater != (player.camera.environment == submerged_env):
+			player.camera.environment = submerged_env if underwater else null
+			session.atmosphere.distant_basin.visible = not underwater
+			pixel_paint.set_shader_parameter("underwater", underwater)
+			session.audio.set_underwater(underwater)
 			water_light_band = -1
-		if player.submerged:
+		if underwater:
 			var band := clampi(floori(-player.camera.global_position.y*2.0),0,36)
 			var daylight := roundi(session.atmosphere.sun_strength*8)
 			if band*10+daylight != water_light_band:
@@ -319,8 +324,8 @@ func _enter_world(config: Dictionary, snapshot: Dictionary, slot: int, save_init
 	session.player.hand.outfit = options.appearance
 	session.player.hand.model_id = "?"
 	session.player.hand.reparent(hands_camera,false)
-	hands_view.render_target_update_mode=SubViewport.UPDATE_ALWAYS
-	pixel_paint.set_shader_parameter("hands_visible",true)
+	session.player.hand.visibility_changed.connect(_update_hands_view)
+	_update_hands_view()
 	session.message.connect(_notify)
 	session.chat_received.connect(chat.receive)
 	session.shawl_spoke.connect(_shawl_subtitle)
@@ -341,6 +346,11 @@ func _enter_world(config: Dictionary, snapshot: Dictionary, slot: int, save_init
 		pending_host_port=0
 		var error:=network.listen(port)
 		_notify("局域网已开放 · 端口 %d" % port if error==OK else "开放联机失败 · 错误 %d" % error,5.0)
+
+func _update_hands_view() -> void:
+	var show_hands := is_instance_valid(session) and is_instance_valid(session.player) and session.player.hand.is_visible_in_tree()
+	hands_view.render_target_update_mode = SubViewport.UPDATE_ALWAYS if show_hands else SubViewport.UPDATE_DISABLED
+	pixel_paint.set_shader_parameter("hands_visible", show_hands)
 
 func close_overlay() -> void:
 	if session == null or session.preview_only:

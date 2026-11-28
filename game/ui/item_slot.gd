@@ -2,6 +2,7 @@ extends Button
 
 var item := ""
 var source := ""
+var slot_index := WastelandBag.PACK
 var quantity := 0
 var image: Texture2D
 var accepts: Callable
@@ -61,7 +62,7 @@ func _get_drag_data(_position: Vector2) -> Variant:
 	ghost.expand_mode=TextureRect.EXPAND_IGNORE_SIZE
 	ghost.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	set_drag_preview(ghost)
-	return {"item":item,"source":source,"quantity":quantity}
+	return {"item":item,"source":source,"quantity":quantity,"slot":slot_index}
 
 func _can_drop_data(_position:Vector2,data:Variant)->bool:
 	return data is Dictionary and data.has_all(["item","source","quantity"]) and accepts.is_valid() and accepts.call(data)

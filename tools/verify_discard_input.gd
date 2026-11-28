@@ -44,7 +44,7 @@ func run()->void:
 	await g_key(false)
 	check(s.fx.serial==start_count,"G with empty hands leaves the world empty")
 	bag.add("stone",5)
-	bag.add("wood",3)
+	bag.add("wood",3,WastelandBag.PACK)
 	bag.assign("stone",0)
 	bag.active=0
 	await g_key(true)
@@ -58,8 +58,7 @@ func run()->void:
 		var row:Dictionary=s.fx.drop_records[str(s.fx.serial)]
 		check((Vector3(row.point)-hand).dot(direction)>0.4,"discard moves forward from the survivor")
 	game.open_panel("bag")
-	game.panels.selection="wood"
-	game.panels._bag_details()
+	game.panels._select_stack("wood",WastelandBag.PACK,3)
 	await g_key(true)
 	await g_key(false)
 	check(bag.count("wood")==2 and bag.count("stone")==4 and drops_of("wood")==1,"backpack G drops the highlighted item once")

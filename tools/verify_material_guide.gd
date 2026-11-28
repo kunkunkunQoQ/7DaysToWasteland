@@ -94,7 +94,7 @@ func run()->void:
 	var cfg:Dictionary=app._default_config()
 	cfg.terrain_revision=2
 	app._enter_world(cfg,{},1,false)
-	app.session.bag.add("packed_snow",1)
+	app.session.bag.add("packed_snow",1,WastelandBag.PACK)
 	app.open_panel("bag")
 	await settle()
 	var tile:Button=app.panels.inventory_buttons[0]

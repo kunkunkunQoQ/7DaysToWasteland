@@ -31,6 +31,8 @@ var swimming_fingers := false
 var empty_grip := ""
 var guard_left := 0.0
 var guard_blend := 0.0
+var right_contact := Vector3.ZERO
+var left_contact := Vector3.ZERO
 var item_material := ShaderMaterial.new()
 var skin_material := ShaderMaterial.new()
 var gloves_worn := false
@@ -386,7 +388,7 @@ func animate(delta: float, pace: float, duck: float, light: float, hit_stop: flo
 	var settle := smoothstep(0.0, 1.0, equip_lower)
 	var recovery := sin(swing * PI) if not model_id.is_empty() else 0.0
 	var reload_pose := sin(PI * reload_ratio)
-	var drift := Vector3(sin(pose_time) * pace * 0.012, cos(pose_time*2.0) * pace * 0.008, 0)
+	var drift := Vector3(sin(pose_time) * 0.006, cos(pose_time*2.0) * 0.004, 0) * minf(pace, 1.6)
 	model.position = Vector3(0.34, -0.322 - duck * 0.026, -0.58) + drift
 	model.position.y += sin(breath_phase)*0.0065/(1.0+pace)
 	model.position += Vector3(0.049 * charge, -reload_pose * 0.22, kick * 0.11 + charge * 0.10)
@@ -424,18 +426,18 @@ func animate(delta: float, pace: float, duck: float, light: float, hit_stop: flo
 		brightness = light
 		_apply_light()
 
-func apply_hand_contacts(right_camera: Vector3, left_camera: Vector3) -> void:
-	# The display rig shares the physical wrists' deflection while keeping its
-	# authored grips and sight line in the separate first-person viewport.
-	var right := right_camera.limit_length(0.13)
-	var left := left_camera.limit_length(0.13)
+func apply_hand_contacts(right_camera: Vector3, left_camera: Vector3, delta: float) -> void:
+	# Filter only the physics correction. A punch or shot keeps its authored timing.
+	var blend := 1.0 - exp(-18.0 * delta)
+	right_contact = right_contact.lerp(right_camera.limit_length(0.075), blend)
+	left_contact = left_contact.lerp(left_camera.limit_length(0.075), blend)
 	if is_instance_valid(resting_left):
 		var view_to_model := model.basis.inverse()
-		right_hand.position += view_to_model * right
-		resting_left.position += view_to_model * left
+		right_hand.position += view_to_model * right_contact
+		resting_left.position += view_to_model * left_contact
 	else:
-		model.position += right
-	if offhand_root.visible: offhand_root.position += left
+		model.position += right_contact
+	if offhand_root.visible: offhand_root.position += left_contact
 
 func _pose_empty_hands(pace: float) -> void:
 	swimming_fingers = swim_blend > 0.40

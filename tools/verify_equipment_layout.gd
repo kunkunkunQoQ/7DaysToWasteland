@@ -59,7 +59,7 @@ func run()->void:
 	# The sample inventory is a fixture. All assignments use pointer or finger input.
 	var session:WastelandSession=app.session
 	for id:String in ["stone_axe","hardhat","canvas_pants","improvised_shield","canvas_pack","meme_shades","fiber","stone"]:
-		session.bag.add(id,1)
+		session.bag.add(id,1,WastelandBag.PACK)
 	await frames(18)
 	var grid:=panels.item_grid
 	for pair:Array in [["hardhat","head"],["canvas_pants","legs"],["canvas_pack","pack"],["meme_shades","eyes"],["improvised_shield","offhand"]]:
@@ -76,7 +76,7 @@ func run()->void:
 	check(avatar.preview_mainhand=="stone_axe" and avatar.grip.has_node("PreviewMainhand") and avatar.offhand_id=="improvised_shield" and avatar.left_grip.is_ancestor_of(avatar.offhand_prop),"distinct axe and shield on opposite animated hands")
 	check(slots.body.item=="" and slots.feet.item=="" and slots.legs.item=="canvas_pants" and slots.pack.item=="canvas_pack","empty outlines coexist with filled slots")
 	await capture_state("equipped")
-	session.bag.add("expedition_pack",1)
+	session.bag.add("expedition_pack",1,WastelandBag.PACK)
 	await frames(12)
 	await click(gear_item(grid,"expedition_pack"))
 	await click(slots.pack)

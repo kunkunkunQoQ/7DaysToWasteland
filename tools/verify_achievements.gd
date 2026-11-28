@@ -180,7 +180,7 @@ func run() -> void:
 	reward("signalcone")
 
 	hold("torch")
-	session.bag.add("wood",session.bag.stack_size("wood")*session.bag.capacity())
+	session.bag.add("wood",session.bag.room_for("wood"))
 	check(session.bag.occupied()==session.bag.capacity(),"full inventory for final reward")
 	p.pitch=1
 	session.atmosphere.weather_kind=3

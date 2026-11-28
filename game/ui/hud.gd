@@ -324,11 +324,11 @@ func _hotbar(foot: Vector2) -> void:
 			draw_rect(Rect2(p,Vector2(61,2)),S.GOLD)
 		_text(p+Vector2(6,15),str(i+1),13,S.GOLD if selected else S.FAINT)
 		var id: String = bag.bar[i]
-		if bag.count(id) > 0:
+		if bag.bar_amounts[i] > 0:
 			var def: Dictionary = session.catalog.items[id]
 			var icon := WastelandItemArt.icon(id,def)
 			draw_texture_rect(icon,Rect2(p+Vector2(12,9),Vector2(36,36)),false)
-			_text(p+Vector2(56,50),str(bag.count(id)) if def.kind != "ranged" else str(bag.magazine.get(id,0)),14,S.TEXT,2)
+			_text(p+Vector2(56,50),str(bag.bar_amounts[i]) if def.kind != "ranged" else str(bag.magazine.get(id,0)),14,S.TEXT,2)
 	var held := bag.current()
 	var display := "空手"
 	if held != "":
@@ -443,7 +443,7 @@ func _water_readout(at: Vector2, player: WastelandSurvivor) -> void:
 	var tint := S.RED if player.breath < 5.0 else S.MINT
 	var rect := Rect2(at + Vector2(-143,0),Vector2(286,50))
 	_box(rect, tint.darkened(0.35))
-	var depth := maxf(0,-player.camera.global_position.y)
+	var depth := maxf(0,-player.eyes.global_position.y)
 	_text(rect.position+Vector2(10,19), "水下 %.1f m" % depth if player.submerged else "水面换气",15,CREAM)
 	_text(rect.position+Vector2(276,19), "氧气 %d s" % ceili(player.breath),15,tint,2)
 	draw_rect(Rect2(rect.position+Vector2(10,25),Vector2(266,3)), S.BORDER)

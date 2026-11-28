@@ -70,7 +70,7 @@ func view(s:Node,key:String)->Dictionary:
 	if not record.has("items"): return {}
 	return {"key":key,"title":s._cache_title(body),"items":record.items.duplicate(),"slots":CAPACITY,"used":occupied(s,record.items)}
 
-func move(s:Node,key:String,action:String,id:String,amount:int)->int:
+func move(s:Node,key:String,action:String,id:String,amount:int,bag_slot:=WastelandBag.ANY)->int:
 	if s.replica or view(s,key).is_empty() or amount<1: return 0
 	if action!="all" and (id=="" or not s.catalog.items.has(id)): return 0
 	var body:StaticBody3D=model(s,key).get_parent()
@@ -81,8 +81,8 @@ func move(s:Node,key:String,action:String,id:String,amount:int)->int:
 	var found:=0
 	match action:
 		"put":
-			moved=mini(amount,mini(s.bag.available_count(id),room(s,contents,id)))
-			if moved<=0 or not s.bag.spend({id:moved}): return 0
+			moved=mini(amount,mini(s.bag.source_count(id,bag_slot),room(s,contents,id)))
+			if moved<=0 or not s.bag.spend({id:moved},bag_slot): return 0
 			contents[id]=int(contents.get(id,0))+moved
 			deposited[id]=int(deposited.get(id,0))+moved
 			var ammo:String=s.catalog.items[id].get("ammo","")
@@ -97,7 +97,7 @@ func move(s:Node,key:String,action:String,id:String,amount:int)->int:
 			for item:String in ids:
 				var available:=int(contents.get(item,0))
 				if available<=0: continue
-				var take:int=s.bag.add(item,available if action=="all" else mini(amount,available))
+				var take:int=s.bag.add(item,available if action=="all" else mini(amount,available),bag_slot)
 				if take<=0: continue
 				var rest:=available-take
 				var own:=int(deposited.get(item,0))

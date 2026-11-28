@@ -494,6 +494,10 @@ func settings(origin: String) -> void:
 	var sensitivity := _range(mouse,"视角灵敏度","",0.35,3.0,float(opts.display.sensitivity)*500,0.05)
 	sensitivity.value_changed.connect(func(value): opts.display.sensitivity = value/500.0)
 	_toggle(mouse,"反转垂直视角",bool(opts.display.invert_y),func(value): opts.display.invert_y = value)
+	_toggle(mouse,"第三人称视角",bool(opts.display.third_person),func(value):
+		opts.display.third_person = value
+		if is_instance_valid(game.session) and is_instance_valid(game.session.player):
+			game.session.player.third_person = value)
 	_toggle(mouse,"向前移动时自动跨越低障碍",bool(opts.display.auto_step),func(value): opts.display.auto_step = value)
 	if not touch_ui:
 		mouse.add_child(S.label("连按两次前进，第二次按住即可疾跑。点选下方键位可重新绑定，重复键位会互换。",15,S.MUTED,true))
@@ -518,6 +522,7 @@ func settings(origin: String) -> void:
 		"左／右摇杆   行走／视角", "左／右扳机   副动作／主动作", "A 跳跃   B 蹲伏   X 交互   Y 装填",
 		"左／右肩键   循环切换快捷栏", "方向键 ↑ 地图  ↓ 委托  ← 方块形状  → 旋转",
 		"左／右摇杆按下   冲刺／开关提灯", "视图键   背包      菜单键   暂停",
+		"触摸板按下   切换第一／第三人称",
 	]:
 		pad.add_child(S.label(line,18,S.MUTED))
 	var exit := S.button("保存设置并返回",_settings_back,true)

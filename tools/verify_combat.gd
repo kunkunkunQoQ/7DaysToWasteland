@@ -433,10 +433,11 @@ func _reload_hazards() -> void:
 	check(session.fx.acid_flights().is_empty(),"an already-resolved shot ID cannot replay its hit")
 
 func _spawn(id: String, at: Vector3, face: Vector3, previous: Dictionary = {}) -> WastelandCreature:
-	session.hordes._spawn(id, at, false, previous)
-	var actor: WastelandCreature = session.hordes.alive.back()
+	var spawn_state := previous.duplicate()
 	var heading := WastelandCreatureRoute.planar(face - at)
-	actor.rotation.y = atan2(-heading.x, -heading.z)
+	spawn_state.facing = atan2(-heading.x, -heading.z)
+	session.hordes._spawn(id, at, false, spawn_state)
+	var actor: WastelandCreature = session.hordes.alive.back()
 	actor.brain.cooldown = 0.0
 	actor.brain.sense_left = 0.0
 	return actor

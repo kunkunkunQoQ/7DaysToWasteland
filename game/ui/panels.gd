@@ -52,6 +52,8 @@ var material_link: Button
 var source_link: Button
 var detail_description: Label
 var selection := ""
+var selection_slot := WastelandBag.PACK
+var selection_amount := 0
 var good_counts := -1
 var last_bag_fingerprint := 0
 var queue_label: Label
@@ -276,7 +278,12 @@ func _columns() -> Array[VBoxContainer]:
 func _bag() -> void:
 	bag_taps.key=""
 	warned_item=""
-	selection=current_context if current_context is String and session.bag.count(current_context)>0 else session.bag.current()
+	selection=session.bag.current()
+	selection_slot=session.bag.active
+	if current_context is String and session.bag.count(current_context)>0:
+		selection=current_context
+		selection_slot=WastelandBag.PACK if session.bag.pack_count(selection)>0 else session.bag.bar.find(selection)
+	selection_amount=session.bag.stack_size(selection)
 	var columns := _columns()
 	var left := columns[0]
 	var right := columns[1]
@@ -379,9 +386,7 @@ func _bag() -> void:
 		link.add_theme_font_size_override("font_size",16)
 		links.add_child(link)
 	var actions:=S.line(left)
-	assign_button=S.button("放入当前快捷格",func():
-		session.ui_command("assign",[selection])
-		_bag_details())
+	assign_button=S.button("放入当前快捷格",_transfer_selected)
 	use_item_button=S.button("使用／装备所选",_consume_selected)
 	discard_button=S.button("丢弃 1 件",discard_selected)
 	for control in [assign_button,use_item_button,discard_button]: actions.add_child(control)
@@ -431,13 +436,15 @@ func _equipment_slot(parent:Control,key:String)->Control:
 	var tile:=preload("res://game/ui/equipment_slot.gd").new()
 	tile.setup(key)
 	parent.add_child(tile)
-	tile.accepts=func(data): return data.source=="bag" and _fits_slot(key,data.item)
+	tile.accepts=func(data): return data.source in ["bag","hotbar"] and _fits_slot(key,data.item)
 	tile.transfer=func(data): _equip_from_bag(key,data.item)
 	tile.pressed.connect(func():
 		if _fits_slot(key,selection):
 			_equip_from_bag(key,selection)
 		elif tile.item!="":
 			selection=tile.item
+			selection_slot=WastelandBag.PACK if session.bag.pack_count(selection)>0 else session.bag.bar.find(selection)
+			selection_amount=session.bag.stack_size(selection)
 			_bag_details())
 	return tile
 
@@ -460,7 +467,7 @@ func discard_selected()->void:
 		else:
 			warned_item=selection
 			warning_until=Time.get_ticks_msec()+3200
-	session.ui_command("discard",[selection,confirm])
+	session.ui_command("discard",[selection,confirm,selection_slot])
 	_refresh_bag()
 
 func _refresh_bag() -> void:
@@ -499,26 +506,35 @@ func _refresh_bag() -> void:
 	var ids := bag.counts.keys()
 	ids.sort_custom(func(a,b): return str(session.catalog.items[a].kind)<str(session.catalog.items[b].kind) if session.catalog.items[a].kind!=session.catalog.items[b].kind else str(a)<str(b))
 	for id in ids:
-		var remaining:=bag.count(id)
+		var remaining:=bag.pack_count(id)
 		while remaining>0:
 			var amount:=mini(remaining,bag.stack_size(id))
 			remaining-=amount
-			var action:=func(): selection=id; _bag_details()
+			var action:=func(): _select_stack(id,WastelandBag.PACK,amount)
 			var item_button:=_inventory_tile(id,amount,false,action)
 			item_button.taps=bag_taps
 			item_button.tap_key=str(item_grid.get_child_count())+":"+str(id)
-			item_button.quick_action=_quick_equip.bind(id)
+			item_button.quick_action=_quick_equip.bind(id,amount)
 			item_grid.add_child(item_button)
 			inventory_buttons.append(item_button)
 	for index in range(maxi(0,capacity-inventory_buttons.size())):
 		var empty:=_inventory_tile("",0,false,Callable())
 		item_grid.add_child(empty)
 	_fit_inventory_rows()
-	for i in range(8):
+	for i in WastelandBag.HOTBAR_SIZE:
 		var id:String=bag.bar[i]
-		var tile:=_inventory_tile(id if bag.count(id)>0 else "",0,true,func(): session.ui_command("slot",[i]); _bag_details(),i+1)
-		tile.accepts=func(data): return data.source=="bag"
-		tile.transfer=func(data): session.ui_command("assign_slot",[data.item,i])
+		var tile:=_inventory_tile(id,bag.bar_amounts[i],true,func():
+			session.ui_command("slot",[i])
+			if id!="" or selection_slot>=0: _select_stack(id,i,bag.bar_amounts[i])
+			else: _bag_details(),i+1)
+		tile.slot_index=i
+		tile.taps=bag_taps
+		tile.tap_key="hotbar:"+str(i)+":"+id
+		if id!="": tile.quick_action=func(): session.ui_command("pack_slot",[i,id])
+		tile.accepts=func(data): return data.source in ["bag","hotbar"]
+		tile.transfer=func(data):
+			if data.source=="bag": session.ui_command("assign_slot",[data.item,i,data.quantity])
+			else: session.ui_command("move_slot",[data.slot,i,data.item])
 		tile.add_theme_stylebox_override("normal",S.flat(Color("#414233") if bag.active==i else S.PANEL,S.GOLD if bag.active==i else S.BORDER,1,0))
 		quick_slots.add_child(tile)
 	_bag_details()
@@ -527,7 +543,10 @@ func _inventory_tile(id:String,amount:int,quick:bool,action:Callable,number:int=
 	var tile:=ItemSlot.new()
 	tile.item=id
 	tile.quantity=amount
-	tile.source="bag" if not quick else ""
+	tile.source="hotbar" if quick else "bag"
+	if not quick:
+		tile.accepts=func(data): return data.source=="hotbar"
+		tile.transfer=func(data): session.ui_command("pack_slot",[data.slot,data.item])
 	tile.custom_minimum_size=Vector2(42,46) if quick else Vector2(49,49)
 	tile.size_flags_horizontal=Control.SIZE_EXPAND_FILL
 	tile.set_meta("item",id)
@@ -540,7 +559,6 @@ func _inventory_tile(id:String,amount:int,quick:bool,action:Callable,number:int=
 	if action.is_valid():
 		tile.pressed.connect(action)
 	else:
-		tile.disabled=true
 		tile.focus_mode=Control.FOCUS_NONE
 	if id!="":
 		var icon:=TextureRect.new()
@@ -557,25 +575,41 @@ func _inventory_tile(id:String,amount:int,quick:bool,action:Callable,number:int=
 		icon.offset_top=3
 		icon.offset_bottom=-3
 		tile.tooltip_text=session.catalog.title(id)
-	if amount>0 or number>0:
-		var counter:=S.label(str(amount if amount>0 else number),14,S.TEXT)
+	for is_number: bool in [false,true]:
+		var value:=number if is_number else amount
+		if value<=0: continue
+		var counter:=S.label(str(value),14,S.GOLD if is_number else S.TEXT)
 		counter.mouse_filter=Control.MOUSE_FILTER_IGNORE
-		counter.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT if amount>0 else HORIZONTAL_ALIGNMENT_LEFT
+		counter.horizontal_alignment=HORIZONTAL_ALIGNMENT_LEFT if is_number else HORIZONTAL_ALIGNMENT_RIGHT
 		tile.add_child(counter)
-		counter.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+		counter.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE if is_number else Control.PRESET_BOTTOM_WIDE)
 		counter.offset_left=4
 		counter.offset_right=-4
-		counter.offset_top=-19
-		counter.offset_bottom=-1
+		counter.offset_top=0 if is_number else -19
+		counter.offset_bottom=18 if is_number else -1
 	return tile
+
+func _select_stack(id:String,source:int,amount:int)->void:
+	selection=id
+	selection_slot=source
+	selection_amount=amount
+	_bag_details()
+
+func _transfer_selected()->void:
+	if selection_slot>=0:
+		session.ui_command("pack_slot",[selection_slot,selection])
+	else:
+		session.ui_command("assign_slot",[selection,session.bag.active,selection_amount])
+	_refresh_bag()
 
 func _bag_details() -> void:
 	var bag := session.bag
 	var item: Dictionary = session.catalog.items.get(selection,{})
 	var active_id: String = bag.current()
 	if warned_item!=selection: warned_item=""
-	var owned:=selection!="" and bag.available_count(selection)>0
-	assign_button.disabled=not owned or selection==active_id
+	var owned:=selection!="" and bag.source_count(selection,selection_slot)>0
+	assign_button.text="收回背包" if selection_slot>=0 else "放入当前快捷格"
+	assign_button.disabled=not owned
 	use_item_button.disabled=not owned or item.get("kind","") not in ["armor","food","med"]
 	discard_button.text="确认丢弃" if warned_item==selection and selection!="" and Time.get_ticks_msec()<=warning_until else "丢弃 1 件"
 	discard_button.disabled=not owned or item.get("kind","")=="quest"
@@ -583,15 +617,16 @@ func _bag_details() -> void:
 	material_link.visible = session.catalog.is_material(selection) and bag.count(selection)>0
 	source_link.visible = bag.count(selection)>0 and not item.is_empty()
 	var details := "当前快捷格 %d / %s" % [bag.active+1,session.catalog.title(active_id) if active_id!="" else "空"]
-	if item.is_empty() or bag.count(selection) <= 0:
+	if item.is_empty() or not owned:
 		detail_title.text = "选择一个物品"
-		details="双击工具设为主手，双击防具穿戴。轻点物品可选择副手槽。\n"+details
+		details="拖放物品可在背包和快捷栏之间转移。双击快捷格收回背包。\n"+details
 		item_detail.texture=null
 	else:
 		detail_title.text = str(item.name)
 		item_detail.texture=WastelandItemArt.icon(selection,item)
 		var labels := {"damage":"伤害","food":"饱食","water":"水分","hp":"生命","warmth":"保暖","rating":"装备"}
-		var lines: Array[String] = ["%s   ·   数量 %d" % [GROUPS.get(item.kind,item.kind),bag.count(selection)]]
+		var location: String = "快捷格 %d"%(selection_slot+1) if selection_slot>=0 else "背包"
+		var lines: Array[String] = ["%s   ·   %s ×%d" % [GROUPS.get(item.kind,item.kind),location,mini(selection_amount,bag.source_count(selection,selection_slot))]]
 		var row: Array[String] = []
 		for stat in labels:
 			if item.has(stat):
@@ -609,12 +644,12 @@ func _bag_details() -> void:
 		details = "\n".join(lines)+"\n"+details
 	detail_description.text = details
 	for tile in inventory_buttons:
-		var chosen:bool=tile.get_meta("item")==selection
+		var chosen:bool=selection_slot==WastelandBag.PACK and tile.get_meta("item")==selection
 		tile.add_theme_stylebox_override("normal",S.flat(Color("#414233") if chosen else S.PANEL,S.GOLD if chosen else S.BORDER,1))
 
-func _quick_equip(id:String)->void:
+func _quick_equip(id:String,amount:int)->void:
 	if active!="bag" or not visible or session.bag.available_count(id)<=0: return
-	session.ui_command("quick_equip",[id])
+	session.ui_command("quick_equip",[id,amount])
 	if _bag_fingerprint()!=last_bag_fingerprint: _refresh_bag()
 	else: _bag_details()
 
@@ -623,14 +658,14 @@ func _consume_selected() -> void:
 	if session.bag.count(selection)<=0:
 		return
 	if item.get("kind","") in ["armor","food","med"]:
-		session.ui_command("consume",[selection])
+		session.ui_command("consume",[selection,selection_slot])
 	else:
 		session.notify("将物品放入快捷栏即可使用")
 	_refresh_bag()
 	_bag_details()
 
 func _bag_fingerprint() -> int:
-	return hash([session.bag.counts,session.bag.active,session.bag.gear,session.bag.bar])
+	return hash([session.bag.counts,session.bag.active,session.bag.gear,session.bag.bar,session.bag.bar_amounts])
 
 func _craft(context: Variant, resume: Dictionary = {}) -> void:
 	recipe_view=resume.get("view","全部")

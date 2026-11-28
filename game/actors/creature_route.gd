@@ -140,7 +140,7 @@ func moved(delta: float, displacement: Vector3, speed: float) -> void:
 				steer_delay = 0.34
 				var head := actor.global_position + Vector3.UP * actor.capsule.height
 				if actor.grounded() and ray(head, head + Vector3.UP * 0.85).is_empty():
-					actor.velocity.y = 4.4
+					actor.try_ground_jump(4.4)
 	if wants_motion and displacement.dot(progress_heading) < speed * delta * 0.23:
 		stuck = minf(2.0, stuck + delta)
 	else:

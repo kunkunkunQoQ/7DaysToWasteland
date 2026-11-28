@@ -84,7 +84,7 @@ func run()->void:
 				valid=false
 				break
 			if not executed.has(step):
-				session.bag.counts.clear()
+				session.bag.restore({})
 				executed[step]=craft_batch(step)
 			valid=valid and executed[step]
 			current=recipe.id
@@ -124,7 +124,7 @@ func test_terminals()->void:
 	check(bike.record.hp>health and session.bag.count("field_service_kit")==prior-1,"maintenance consumes kit and restores vehicle condition")
 
 func test_harvest_meal()->void:
-	session.bag.counts.clear()
+	session.bag.restore({})
 	var con:=session.construction
 	var at:=session.player.position+Vector3(2,0,1)
 	at.y=session.stream.ground_at(at)

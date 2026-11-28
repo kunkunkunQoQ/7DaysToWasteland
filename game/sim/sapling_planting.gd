@@ -19,7 +19,7 @@ static func obstruction(session: WastelandSession, hit: Dictionary) -> String:
 	var root_xz := Vector2(point.x,point.z)
 	var chunk: WastelandChunk = session.stream.active.get(WastelandTerrainGen.chunk_at(root_xz))
 	if chunk==null or ground!=chunk.terrain_body: return "瞄准近处的天然地面"
-	if point.distance_squared_to(session.player.camera.global_position)>REACH*REACH+0.001: return "走近一些再种树"
+	if point.distance_squared_to(session.player.action_origin())>REACH*REACH+0.001: return "走近一些再种树"
 	if session.stream.water_at(point): return "树苗需要干燥的陆地"
 	if chunk.spring_at.is_finite():
 		var spring_offset := (root_xz-Vector2(chunk.spring_at.x,chunk.spring_at.z))/Vector2(1.82,1.3)
@@ -67,17 +67,10 @@ static func plant(session: WastelandSession, id: String) -> bool:
 	if not reason.is_empty():
 		session.notify(reason,1.5)
 		return false
-	var bag := session.bag
-	var automatic := bag.automatic_shortcuts.has(id)
-	if not bag.spend({id:1}): return false
 	if not session.grove.plant(item.tree_model,hit.position):
-		# Restore the originating shortcut even if spending the last seedling cleared it.
-		bag.counts[id]=bag.count(id)+1
-		if automatic:
-			bag.bar[bag.active]=id
-			bag.automatic_shortcuts[id]=true
 		session.notify("此处暂时无法种树",1.5)
 		return false
+	session.bag.spend({id:1},session.bag.active)
 	session.player.hand.swing_attack(0.45)
 	session.notify("已种下"+session.catalog.title(id),1.6)
 	return true

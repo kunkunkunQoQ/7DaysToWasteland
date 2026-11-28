@@ -141,7 +141,7 @@ func run() -> void:
 		var target:=Vector3(old_cell.x*32+x,0,old_cell.y*32+28)
 		var tool: String=["shovel","iron_pick"][contacts]
 		s.bag.add(tool,1)
-		s.bag.bar[s.bag.active]=tool
+		s.bag.assign(tool,s.bag.active)
 		s.player.global_position=Vector3(target.x,s.stream.ground_at(target)+0.12,target.z)
 		s.player.eyes.rotation.x=-PI/2.0
 		s.player.camera.force_update_transform()

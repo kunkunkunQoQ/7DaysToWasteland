@@ -541,18 +541,26 @@ func _join(label: String, part: Segment, axes: Basis, anchor: Vector3) -> void:
 		var hinge := HingeJoint3D.new()
 		hinge.set_flag(HingeJoint3D.FLAG_USE_LIMIT, true)
 		var flexion := part.original.basis.orthonormalized().get_euler().x
-		if label.begins_with("knee_"):
-			hinge.set_param(HingeJoint3D.PARAM_LIMIT_LOWER, minf(0.0, -2.5 - flexion))
-			hinge.set_param(HingeJoint3D.PARAM_LIMIT_UPPER, maxf(0.0, 0.20 - flexion))
-		else:
-			hinge.set_param(HingeJoint3D.PARAM_LIMIT_LOWER, minf(0.0, -0.25 - flexion))
-			hinge.set_param(HingeJoint3D.PARAM_LIMIT_UPPER, maxf(0.0, 2.45 - flexion))
+		var limits := Vector2(-2.5, 0.20) if label.begins_with("knee_") else Vector2(-0.25, 2.45)
+		limits -= Vector2.ONE * flexion
+		var creature := get_parent() as WastelandCreature
+		var upright_knee := label.begins_with("knee_") and creature != null and creature.type != "crawler" and not creature.low_crawl()
+		if _avatar != null or upright_knee:
+			# These flexion ranges describe the child relative to its parent.
+			# The native hinge measures that rotation in the opposite direction.
+			limits = Vector2(-limits.y, -limits.x)
+		hinge.set_param(HingeJoint3D.PARAM_LIMIT_LOWER, minf(0.0, limits.x))
+		hinge.set_param(HingeJoint3D.PARAM_LIMIT_UPPER, maxf(0.0, limits.y))
 		axes *= Basis(Vector3.UP, PI * 0.5)
 		joint = hinge
 	else:
 		var spine := label in ["torso", "head", "neck", "skull"]
-		var twist := 0.41 if spine else 0.69
+		var ankle := _avatar != null and label.begins_with("ankle_")
+		# In this joint frame Y flexes the ankle, X twists it and Z rolls it.
+		# Keep the forward stride free while holding the sole on its broad face.
+		var twist := 0.32 if ankle else 0.41 if spine else 0.69
 		var swing := 0.56 if spine else 1.05
+		var roll := 0.30 if ankle else swing
 		# Use the same native limited joint as the passive character rig. A cone-twist
 		# constraint can inject angular energy at the swing limit of tiny ears and paws.
 		var socket := Generic6DOFJoint3D.new()
@@ -560,8 +568,8 @@ func _join(label: String, part: Segment, axes: Basis, anchor: Vector3) -> void:
 		socket.set_param_x(Generic6DOFJoint3D.PARAM_ANGULAR_UPPER_LIMIT, twist)
 		socket.set_param_y(Generic6DOFJoint3D.PARAM_ANGULAR_LOWER_LIMIT, -swing)
 		socket.set_param_y(Generic6DOFJoint3D.PARAM_ANGULAR_UPPER_LIMIT, swing)
-		socket.set_param_z(Generic6DOFJoint3D.PARAM_ANGULAR_LOWER_LIMIT, -swing)
-		socket.set_param_z(Generic6DOFJoint3D.PARAM_ANGULAR_UPPER_LIMIT, swing)
+		socket.set_param_z(Generic6DOFJoint3D.PARAM_ANGULAR_LOWER_LIMIT, -roll)
+		socket.set_param_z(Generic6DOFJoint3D.PARAM_ANGULAR_UPPER_LIMIT, roll)
 		socket.set_param_x(Generic6DOFJoint3D.PARAM_ANGULAR_ERP, 0.28)
 		socket.set_param_y(Generic6DOFJoint3D.PARAM_ANGULAR_ERP, 0.28)
 		socket.set_param_z(Generic6DOFJoint3D.PARAM_ANGULAR_ERP, 0.28)

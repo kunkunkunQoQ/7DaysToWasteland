@@ -2,10 +2,12 @@ extends RefCounted
 
 const Rag := preload("res://game/actors/physical_ragdoll.gd")
 const ActiveMotion := preload("res://game/actors/active_ragdoll.gd")
+const ImpactResistance := preload("res://game/actors/impact_resistance.gd")
 const Hits := preload("res://game/actors/ragdoll_hits.gd")
 const Heron := preload("res://game/art/heron_rig.gd")
 const Fish := preload("res://game/art/lake_fish_rig.gd")
 const HEALTH := {"heron": 18.0, "lake_fish": 6.0, "pond_turtle": 26.0, "crayfish": 8.0}
+const KNOCKDOWN_FORCE := {"heron":14.0,"lake_fish":4.4,"pond_turtle":17.0,"crayfish":6.4}
 var rows := {}
 var bodies := {}
 var _joining := {}
@@ -97,7 +99,6 @@ func strike(lake: Node3D, hit: Dictionary, damage: float, origin: Vector3, heavy
 					row.home = patch.perches[0]
 					row.form = "young" if patch.juvenile else ""
 					row.face = lake._face_at(patch.perches[0], kind, 0)
-					patch.bird.hide()
 					break
 				var slot: int = patch.fish_ids.find(id)
 				if slot >= 0:
@@ -114,12 +115,29 @@ func strike(lake: Node3D, hit: Dictionary, damage: float, origin: Vector3, heavy
 	row.revision = int(row.get("revision", 0)) + 1
 	if row.hp <= 0.0:
 		row.return_at = float(lake.session.clock.hours) + 24.0
-	row.until = float(lake.session.clock.elapsed) + (Rag.CORPSE_SECONDS if row.hp <= 0.0 else 1.05)
+	var now := float(lake.session.clock.elapsed)
 	var dir := (Vector3(hit.position) - origin).normalized()
 	row.hit_point = hit.position
 	row.hit_bone = hit.bone
-	row.impact = dir * (2.5 if heavy else 1.2) + Vector3.UP * 0.28
+	var force := damage*(1.55 if heavy else 0.82)
+	var label := String(hit.bone)
+	if label=="Shell": force *= 0.58
+	elif label.begins_with("Wing") or label.begins_with("Pectoral") or label.begins_with("Claw"): force *= 0.75
+	var threshold: float = KNOCKDOWN_FORCE[kind]
+	var drive: ActiveMotion = lake.drivers.get(id)
+	row.impact = dir*clampf(0.32+2.2*force/threshold,0.38,4.0)+Vector3.UP*0.12
 	rows[id] = row
+	if row.hp>0.0 and not bodies.has(id):
+		var load := ImpactResistance.after_hit(row.get("impact_load",Vector2.ZERO),now,force,threshold,drive)
+		if load.x<1.0:
+			row.impact_load = load
+			row.light_hit = row.revision
+			if drive!=null: drive.kick_at(row.impact,row.hit_point,row.hit_bone)
+			lake.impact_changed.emit()
+			return true
+	row.erase("impact_load")
+	row.erase("light_hit")
+	row.until = now+(Rag.CORPSE_SECONDS if row.hp<=0.0 else 1.05)
 	if not bodies.has(id):
 		row.source = hit.source
 		row.beat = hit.beat
@@ -189,7 +207,7 @@ func snapshot() -> Dictionary:
 	for id: String in bodies: _save_pose(id, result[id])
 	return result
 
-func restore(lake: Node3D, incoming: Dictionary) -> void:
+func restore(lake: Node3D, incoming: Dictionary, play_hits := false) -> void:
 	for id: String in bodies.keys():
 		var row: Dictionary = incoming.get(id, {})
 		if row.is_empty() or row.get("until", -1.0) < 0.0:
@@ -198,6 +216,13 @@ func restore(lake: Node3D, incoming: Dictionary) -> void:
 			_apply(row, bodies[id].rig)
 			bodies[id].final_sent = row.get("settled", false)
 			Hits.enable(bodies[id].rig, row.hp <= 0.0, "lake", id)
+	if play_hits:
+		for id: String in incoming:
+			var row: Dictionary = incoming[id]
+			var serial := int(row.get("light_hit",0))
+			if serial<=int(rows.get(id,{}).get("revision",0)): continue
+			var drive: ActiveMotion = lake.drivers.get(id)
+			if drive!=null: drive.kick_at(row.impact,row.hit_point,row.hit_bone)
 	rows = incoming.duplicate(true)
 	lake.countdown = 0.0
 

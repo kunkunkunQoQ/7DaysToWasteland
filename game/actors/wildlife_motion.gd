@@ -123,6 +123,7 @@ func pose(actor: Node3D, speed: float, brace: float, delta: float) -> void:
 	var torso_basis := Basis.from_euler(Vector3(pitch, yaw, roll))
 	var torso_at := torso_rest + Vector3(0, leg_length * (bob + breath * 0.009 - swim * 0.25), 0)
 	var skeleton: Skeleton3D = actor.skeleton
+	var stride_axis: Vector3 = actor.stride_axis(actor.rig.global_basis)
 	skeleton.set_bone_pose_position(torso_id, torso_at)
 	skeleton.set_bone_pose_rotation(torso_id, torso_basis.get_rotation_quaternion())
 	var inverse := torso_basis.transposed()
@@ -149,13 +150,13 @@ func pose(actor: Node3D, speed: float, brace: float, delta: float) -> void:
 		var step := beat / duty - 0.5 if stance else 0.5 - smoothstep(0.0, 1.0, swing)
 		var limb := limbs[i]
 		var target := limb.rest_paw
-		target.z += step * travel * (1.0 + turn * 0.14 * signf(limb.socket.x))
+		target += stride_axis * step * travel * (1.0 + turn * 0.14 * signf(limb.socket.x))
 		target.y += leg_length * height * motion * (0.20 + gather * (0.58 if springer else 0.19))
 		target.y += leg_length * suspension * profile.w * height
 		if actor.foot_contacts.enabled and not (kind == "jerboa" and not rear):
 			# Support IDs are left/right front, then left/right hind. The model
 			# orders its bones right/left hind, then right/left front.
-			target = actor.foot_contacts.target(3-i, actor.rig.global_transform, target, stance or motion < 0.01, swing, leg_length * scale_z * 0.48)
+			target = actor.foot_contacts.target(3-i, skeleton.get_bone_name(limb.paw), actor.rig.global_transform, target, stance or motion < 0.01, swing, leg_length * scale_z * 0.48)
 		var foot_support := (1.0 - height * 0.84) * (1.0 - swim)
 		var floor_y := -tangent.dot(Vector2(target.x, target.z))
 		target.y += (floor_y + limb.rest_paw.y * (1.0 / floor_normal.y - 1.0)) * (1.0 - swim)
@@ -175,6 +176,15 @@ func pose(actor: Node3D, speed: float, brace: float, delta: float) -> void:
 		var ground := Basis(Quaternion.IDENTITY.slerp(slope_rotation, foot_support))
 		_place(skeleton, limb, inverse * (target - torso_at) - limb.socket, heel_pitch, inverse * ground * Basis(Vector3.RIGHT, foot_pitch), rear)
 	_head_and_tail(actor, clock, phase, motion, turn, pitch, roll, breath, brace)
+	if springer and ratio > 0.40 and not actor.ground_intent.is_zero_approx() and actor.foot_contacts.enabled:
+		var stance_bones: Array[StringName] = actor.foot_contacts.stance_bones
+		var hind_push := (stance_bones.has(&"paw0") or stance_bones.has(&"paw1")) and not stance_bones.has(&"paw2") and not stance_bones.has(&"paw3")
+		# The last half of hind stance launches the existing bound. Its airborne
+		# time comes from this species' stride period and duty factor.
+		if hind_push and stride_cycle >= duty * 0.55 and stride_cycle < duty:
+			var flight := (1.0-duty)/frequency
+			var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity",18.0))
+			actor.try_ground_jump(clampf(gravity*flight*0.5,0.8,2.7),delta)
 
 func _place(skeleton: Skeleton3D, limb: Limb, target: Vector3, heel_pitch: float, paw_basis: Basis, rear: bool) -> void:
 	var bank := Basis(Vector3.BACK, atan2(target.x, -target.y))

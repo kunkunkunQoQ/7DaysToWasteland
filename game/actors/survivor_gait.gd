@@ -23,6 +23,10 @@ var support_sway := 0.0
 var drop := 0.0
 var last_root := Vector3.INF
 var last_velocity := Vector3.ZERO
+var travel_origin := Vector3.ZERO
+var travel_elapsed := 0.0
+var average_travel := Vector3.ZERO
+var input_driven := false
 var previous_grounded := false
 var landing := 0.0
 var swing_strength := 0.0
@@ -36,10 +40,22 @@ var fall_brace := 0.0
 var landing_target := 0.0
 var fall_probe_time := 0.0
 var fall_surface := Vector3.INF
+var desired_travel := Vector3.ZERO
+var stair_contact := Vector3.INF
+var stair_direction := Vector3.ZERO
+
+func supporting_ankles() -> Array[StringName]:
+	var ankles: Array[StringName] = []
+	if feet[0].planted: ankles.append(&"ankle_l")
+	if feet[1].planted: ankles.append(&"ankle_r")
+	return ankles
 
 func reset() -> void:
 	last_root = Vector3.INF
 	released = -1
+	desired_travel = Vector3.ZERO
+	input_driven = false
+	stair_contact = Vector3.INF
 
 func advance(dt: float, frame: Transform3D, velocity: Vector3, grounded: bool, floor_normal: Vector3,
 		duck: float, half_width: float, leg_length: float, probe: Callable, recovery_foot: int, fall_probe := Callable()) -> void:
@@ -51,10 +67,23 @@ func advance(dt: float, frame: Transform3D, velocity: Vector3, grounded: bool, f
 	if restart:
 		speed = flat.length()
 		last_velocity = flat
+		travel_origin = pos
+		travel_elapsed = 0.0
+		average_travel = flat
 		lean = Vector3.ZERO
 		landing = 0.0
 		hip_compression = 0.0
 		phase = 0.06
+	travel_elapsed += h
+	if travel_elapsed >= 0.15:
+		average_travel = ((pos-travel_origin)/travel_elapsed).slide(Vector3.UP)
+		travel_origin = pos
+		travel_elapsed = 0.0
+	# The follower capsule can alternate rapidly about a stationary pelvis. Use
+	# net displacement once the movement input is released, including braking.
+	if not desired_travel.is_zero_approx(): input_driven = true
+	elif grounded and (input_driven or probe.is_valid()):
+		flat = average_travel if average_travel.length_squared() > 0.22*0.22 else Vector3.ZERO
 	speed = lerpf(speed, flat.length(), 1.0 - exp(-h * 15.0))
 	var acceleration := ((flat - Vector3(last_velocity.x, 0, last_velocity.z)) / maxf(0.001, h)).limit_length(14)
 	lean = lean.lerp(basis.transposed() * acceleration, 1.0 - exp(-h * 7.0))
@@ -63,12 +92,25 @@ func advance(dt: float, frame: Transform3D, velocity: Vector3, grounded: bool, f
 	var width := half_width + 0.022 + 0.036 * duck + 0.050 * smoothstep(0.2, 3.0, absf(local_velocity.x))
 	var forward_share := absf(local_velocity.z) / maxf(0.1, flat.length())
 	var run := smoothstep(2.2, 6.5, speed)
-	var period := (1.04 - 0.39 * smoothstep(0, 3.5, speed) - 0.20 * run) * lerpf(1.0, 0.85, duck)
+	var period := (1.04 - 0.39 * smoothstep(0, 3.5, speed) - 0.11 * run) * lerpf(1.0, 0.85, duck)
 	var contact_length := lerpf(0.49, 0.79, forward_share) * leg_length * lerpf(1.0, 0.72, duck)
+	# Strike with room ahead of the heel to retract before contact. The trailing
+	# sole then stays behind the hip for the rest of its support interval.
+	var strike_share := lerpf(0.5,0.37,smoothstep(1.8,4.0,speed))
 	var stance := minf(0.59, contact_length / maxf(0.1, speed * period))
 	var moving := flat.length_squared() > 0.016
+	# At rest the first swing must be possible before the supporting leg has accelerated the hips.
+	# The short lead changes only where the foot lands and never translates the character.
+	var first_step := grounded and desired_travel.length_squared() > 0.04 and flat.length_squared() < 0.10
+	var balance_step := flat
+	if grounded and not desired_travel.is_zero_approx():
+		# As actual speed builds, transition from the starting reach to measured travel.
+		var lead := 1.0 - smoothstep(0.24, 0.75, flat.length())
+		balance_step = flat.lerp(desired_travel.limit_length(0.74), lead)
+	var start_side := 0 if basis.x.dot(desired_travel) < -0.15 else 1
 	var home: Array[Vector3] = [pos - basis.x * width, pos + basis.x * width]
 	var reposition := false
+	var turning := false
 	for i in 2:
 		var foot := feet[i]
 		if restart or grounded != previous_grounded or (i == released and i != recovery_foot):
@@ -79,8 +121,15 @@ func advance(dt: float, frame: Transform3D, velocity: Vector3, grounded: bool, f
 			foot.planted = true
 			foot.roll = 0.0
 		var gap := (home[i] - foot.sole).slide(Vector3.UP)
-		reposition = reposition or not foot.planted or gap.length_squared() > 0.0036 or absf(angle_difference(foot.heading, yaw)) > 0.24
-	if not restart and grounded and (moving or reposition):
+		var staged := first_step and i == start_side and -gap.dot(balance_step.normalized()) > 0.08
+		turning = turning or absf(angle_difference(foot.heading, yaw)) > 0.24
+		reposition = reposition or not foot.planted or (not staged and gap.length_squared() > 0.0144) or turning
+	var start_needed := first_step and (feet[start_side].sole - home[start_side]).dot(balance_step.normalized()) < 0.08
+	# After braking, set down the last lifted foot under the hip. Waiting for
+	# another complete stride here makes the body mark time while standing.
+	var settling := grounded and input_driven and desired_travel.is_zero_approx() and not moving and not turning
+	if settling: reposition = false
+	if not restart and grounded and (moving or reposition or start_needed):
 		phase = fposmod(phase + h / period, 1.0)
 	swing_strength = move_toward(swing_strength, smoothstep(0.05, 1.8, speed) if grounded else 0.0, h * 6.0)
 	_update_fall(h, pos, velocity, grounded, restart, fall_probe)
@@ -111,9 +160,18 @@ func advance(dt: float, frame: Transform3D, velocity: Vector3, grounded: bool, f
 			foot.heading = yaw
 			foot.roll = -0.15
 			continue
+		if settling:
+			if not foot.planted:
+				_sample(foot,home[i],pos,floor_normal,probe)
+				foot.sole = foot.sole.move_toward(foot.ground,h*1.75)
+				foot.planted = foot.sole.is_equal_approx(foot.ground)
+			foot.roll = move_toward(foot.roll,0.0,h*2.0)
+			foot.heading = yaw
+			continue
 		if (foot.planted and t < stance) or (not foot.planted and touched_down):
 			if not foot.planted:
-				var heel := home[i] + flat * (period * (0.5 * stance - t))
+				var heel := home[i] + balance_step * (period * (strike_share * stance - t))
+				heel = _step_reach(heel)
 				_sample(foot, heel, pos, floor_normal, probe, true)
 				foot.sole = foot.ground
 				foot.planted = true
@@ -122,7 +180,10 @@ func advance(dt: float, frame: Transform3D, velocity: Vector3, grounded: bool, f
 			foot.roll *= -signf(local_velocity.z)
 			continue
 		var gap := (home[i] - foot.sole).slide(Vector3.UP)
-		if foot.planted and not moving and gap.length_squared() < 0.0036 and absf(angle_difference(foot.heading, yaw)) < 0.24:
+		if foot.planted and first_step and i == start_side and -gap.dot(balance_step.normalized()) > 0.08 and absf(angle_difference(foot.heading, yaw)) < 0.24:
+			foot.roll = 0.0
+			continue
+		if foot.planted and not moving and not (first_step and i == start_side) and gap.length_squared() <= 0.0144 and absf(angle_difference(foot.heading, yaw)) <= 0.24:
 			foot.roll = 0.0
 			continue
 		if foot.planted and t > 0.88: continue
@@ -132,11 +193,20 @@ func advance(dt: float, frame: Transform3D, velocity: Vector3, grounded: bool, f
 			foot.probe_at = Vector3.INF
 			foot.takeoff_phase = t
 		var swing := clampf((t - foot.takeoff_phase) / maxf(0.001, 1.0 - foot.takeoff_phase), 0.0, 1.0)
-		var touchdown := home[i] + flat * (period * (1.0 - t + 0.5 * stance))
+		var touchdown := home[i] + balance_step * (period * (1.0 - t + strike_share * stance))
+		touchdown = _step_reach(touchdown)
 		_sample(foot, touchdown, pos, floor_normal, probe)
-		foot.sole = foot.origin.lerp(foot.ground, smoothstep(0.0, 1.0, swing))
+		# Retract the foot under the hip and finish its forward reach before heel
+		# strike, leaving the foot motor time to decelerate on the approach.
+		var transfer := smoothstep(0.0,0.88,swing)
+		foot.sole = foot.origin.lerp(foot.ground, transfer)
+		if not stair_contact.is_finite():
+			var offset := (foot.sole-home[i]).slide(Vector3.UP)
+			var reachable := offset.limit_length(contact_length*0.62)
+			foot.sole += reachable-offset
 		var lift := lerpf(0.078, 0.23, run) * lerpf(1.0, 0.68, duck)
-		foot.sole.y += sin(PI * swing) * lift
+		var lift_phase := lerpf(swing,1.0-(1.0-swing)*(1.0-swing),0.38-0.62*run)
+		foot.sole.y += sin(PI * lift_phase) * (lift + maxf(0, foot.ground.y - foot.origin.y) * 0.36)
 		foot.roll = (-0.17 + 0.27 * swing) * swing_strength * -signf(local_velocity.z)
 		foot.heading = lerp_angle(foot.heading, yaw, 1.0 - exp(-h * 14.0))
 	var support := sin(TAU * (phase + 0.11))
@@ -144,7 +214,7 @@ func advance(dt: float, frame: Transform3D, velocity: Vector3, grounded: bool, f
 	drop = landing + swing_strength * (0.057 + 0.05 * run + 0.018 * cos(phase * TAU * 2.0))
 	released = recovery_foot
 	previous_grounded = grounded
-	last_velocity = velocity
+	last_velocity = Vector3(flat.x, velocity.y, flat.z)
 	last_root = pos
 
 func _update_fall(dt: float, at: Vector3, velocity: Vector3, grounded: bool, restart: bool, probe: Callable) -> void:
@@ -191,9 +261,17 @@ func _update_fall(dt: float, at: Vector3, velocity: Vector3, grounded: bool, res
 	landing = move_toward(landing, 0, dt * 1.5)
 	landing_target = 0.0
 
+func _step_reach(target: Vector3) -> Vector3:
+	if stair_contact.is_finite():
+		var advance := (stair_contact - target).dot(stair_direction)
+		if advance > 0: target += stair_direction * advance
+	return target
+
 func _sample(foot: Foot, at: Vector3, root: Vector3, normal: Vector3, probe: Callable, force := false) -> void:
 	var n := normal if normal.is_finite() and normal.y > 0.48 else Vector3.UP
 	var y := root.y - ((at.x - root.x) * n.x + (at.z - root.z) * n.z) / n.y
+	if stair_contact.is_finite() and (at - stair_contact).dot(stair_direction) >= -0.02:
+		y = stair_contact.y
 	var query := Vector3(at.x, y, at.z)
 	if force or not foot.probe_at.is_finite() or foot.probe_at.distance_squared_to(query) > 0.012:
 		foot.probe_at = query

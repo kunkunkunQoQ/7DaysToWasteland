@@ -172,7 +172,7 @@ func run()->void:
 		await process_frame
 	var session:WastelandSession=app.session
 	for id:String in ["stone_axe","hardhat","canvas_pants","canvas_pack","expedition_pack","torch","clean_water","wood","fiber","stone","scrap","bandage","berries","spring","cloth"]:
-		session.bag.add(id,1)
+		session.bag.add(id,1,WastelandBag.PACK)
 	if mobile:
 		var controls:Control=app.hud.get_node("TouchControls")
 		var at:Vector2=controls.layout.inventory.get_center()
@@ -262,14 +262,14 @@ func run()->void:
 		await frames(12)
 		press(at,false)
 		await shot("avatar-bag-20x9")
-	var prior:=session.bag.counts.duplicate()
-	session.bag.counts={"wood":session.bag.stack_size("wood")*31}
+	var prior:=session.bag.snapshot()
+	session.bag.restore({"counts":{"wood":session.bag.stack_size("wood")*31}})
 	await frames(18)
 	check(grid.get_child_count()==31 and session.bag.capacity()==27 and panels.bag_list.get_meta("count_label").text.contains("超量"),"legacy excess remains visible above current capacity")
 	session.bag.spend({"wood":session.bag.stack_size("wood")*6})
 	await frames(18)
 	check(grid.get_child_count()==27,"three rows return after excess is removed")
-	session.bag.counts=prior
+	session.bag.restore(prior)
 	await session.stream.quiesce()
 	await session.audio.finish_playback()
 	app.queue_free()

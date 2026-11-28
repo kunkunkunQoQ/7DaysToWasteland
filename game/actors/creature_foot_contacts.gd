@@ -1,19 +1,21 @@
 extends RefCounted
 
-# Near, grounded characters keep stance points in world space as their body
+# Grounded characters keep stance points in world space as their body
 # moves or turns. Swing still belongs to each species' original gait solver.
 var enabled := false
 var recovery_foot := -1
+var stance_bones: Array[StringName] = []
 var planted := PackedVector3Array([Vector3.INF,Vector3.INF,Vector3.INF,Vector3.INF])
 var release_offset := PackedVector3Array([Vector3.ZERO,Vector3.ZERO,Vector3.ZERO,Vector3.ZERO])
 
 func clear() -> void:
+	stance_bones.clear()
 	planted.fill(Vector3.INF)
 	release_offset.fill(Vector3.ZERO)
 	enabled = false
 	recovery_foot = -1
 
-func target(index: int, frame: Transform3D, local_point: Vector3, in_stance: bool, swing: float, reach: float) -> Vector3:
+func target(index: int, bone: StringName, frame: Transform3D, local_point: Vector3, in_stance: bool, swing: float, reach: float) -> Vector3:
 	if not enabled:
 		return local_point
 	if index == recovery_foot:
@@ -23,6 +25,7 @@ func target(index: int, frame: Transform3D, local_point: Vector3, in_stance: boo
 	var world := frame * local_point
 	var offset := Vector3.ZERO
 	if in_stance:
+		stance_bones.append(bone)
 		if not planted[index].is_finite():
 			planted[index] = world
 		offset = planted[index] - world

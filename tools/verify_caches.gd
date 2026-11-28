@@ -154,11 +154,11 @@ func _gameplay() -> void:
 	var body: StaticBody3D = model.get_parent()
 	var record: Dictionary = session.stream.chunk_diff(cell).containers[key]
 	_check(model.name=="SupplyChest" and record==original and model.last_state==1,"legacy stable key restores original items and visual state")
-	session.bag.counts = {"wood":session.bag.stack_size("wood")*session.bag.capacity()-2}
+	session.bag.add("wood",session.bag.room_for("wood")-2)
 	preload("res://tools/chest_actions.gd").take_all(session,body)
 	_check(record.items=={"wood":2} and model.last_state==1,"partial transfer leaves exact remainder")
 	_check(session.save_now(false)==OK and WastelandSave.read(2).diffs["-1,1"].containers[key].items=={"wood":2},"partial remainder survives disk serialization")
-	session.bag.counts.clear()
+	session.bag.restore({})
 	preload("res://tools/chest_actions.gd").take_all(session,body)
 	_check(record.items.is_empty() and session.bag.counts=={"wood":2} and model.last_state==2,"empty state transfers last two units")
 	preload("res://tools/chest_actions.gd").take_all(session,body)
@@ -175,18 +175,18 @@ func _gameplay() -> void:
 		var site_key := site_chunk.object_key("submerged/"+id)
 		var chest: StaticBody3D = site_chunk.supply_caches[site_key].get_parent()
 		_check(chest.get_meta("cache_profile")==id and chest.get_meta("type")==id+"_salvage",id+" stable wreck key and table")
-		session.bag.counts.clear()
+		session.bag.restore({})
 		preload("res://tools/chest_actions.gd").take_all(session,chest)
 		_check(not session.bag.counts.is_empty() and session.progress.records.has("recover_"+id),id+" field recovery recorded")
 		submerged.append(chest)
 	session.clock.hours += 120
 	session.stream.advance_loot_day(session.clock.day())
 	_check(model.last_state==0,"eligible empty land chest closes when refill day arrives")
-	session.bag.counts.clear()
+	session.bag.restore({})
 	preload("res://tools/chest_actions.gd").take_all(session,body)
 	_check(not session.bag.counts.is_empty() and session.stream.chunk_diff(cell).containers[key].next==session.clock.day()+2,"land chest issues refreshed supplies and advances deadline")
 	for chest in submerged:
-		session.bag.counts.clear()
+		session.bag.restore({})
 		preload("res://tools/chest_actions.gd").take_all(session,chest)
 		_check(session.bag.counts.is_empty() and chest.get_node("SupplyChest").last_state==2,"wreck stays empty after multiple days")
 	_check(session.save_now(false)==OK,"session serialized")
@@ -235,14 +235,15 @@ func _frontier_caches()->void:
 			found[region]={"cell":cell,"key":key,"at":box.global_position}
 			var table:=region+"_cache"
 			_check(box.get_meta("type")==table and session._cache_title(box)==Chest.NAMES[region],"actual "+region+" terrain has the correctly named exclusive cache")
-			session.bag.counts={"wood":session.bag.stack_size("wood")*session.bag.capacity()}
+			session.bag.restore({})
+			session.bag.add("wood",session.bag.room_for("wood"))
 			preload("res://tools/chest_actions.gd").take_all(session,box)
 			var record:Dictionary=stream.chunk_diff(cell).containers[key]
 			var goods:Dictionary=record.items.duplicate()
 			var allowed:={}
 			for row:Array in session.catalog.loot[table].items: allowed[row[0]]=true
 			_check(not model.opened and model.last_state==1 and not goods.is_empty() and goods.keys().all(func(id): return allowed.has(id)),"preview opens with region-specific cargo in "+region)
-			session.bag.counts.clear()
+			session.bag.restore({})
 			preload("res://tools/chest_actions.gd").take_all(session,box)
 			preload("res://tools/chest_actions.gd").take_all(session,box)
 			_check(session.bag.counts==goods and model.last_state==2 and record.items.is_empty(),"contents transfer exactly once from "+region)

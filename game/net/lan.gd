@@ -4,7 +4,7 @@ extends Node
 const DEFAULT_PORT := 7357
 const DISCOVERY := preload("res://game/net/lan_discovery.gd")
 const MAX_PLAYERS := DISCOVERY.MAX_PLAYERS
-const PROTOCOL_VERSION := 5
+const PROTOCOL_VERSION := 6
 const HOST_ID := 1
 const JOIN_TIMEOUT_MS := 20000
 var discovery := DISCOVERY.new()
@@ -15,8 +15,9 @@ const EFFECTS := ["step_soil","step_grass","step_leaves","step_wood","step_stone
 const KEYS := ["jump","sprint","crouch","use","fire","alternate","reload","shape","rotate","flashlight","discard","slot_next","slot_prev",
 	"slot_1","slot_2","slot_3","slot_4","slot_5","slot_6","slot_7","slot_8","offhand_use","swap_hands"]
 static var key_mask := (1 << KEYS.size()) - 1
+const THIRD_PERSON_HELD_BIT := 1 << 30
 const DEVICE_COMMANDS := ["craft","cancel","collect","fuel","rest","enable","feed_fire","smelt_input"]
-static var ACTIONS := DEVICE_COMMANDS + ["save","chat","slot","assign","assign_slot","quick_equip","offhand","swap_hands","consume","discard","learn","job","barter","deliver","dispatch","patrol_start","patrol_claim","rebuild_board","recover_archive","marker","unmark","vehicle","repair_vehicle","revive","chest_take","chest_put","chest_all","chest_close"]
+static var ACTIONS := DEVICE_COMMANDS + ["save","chat","slot","assign","assign_slot","pack_slot","move_slot","quick_equip","offhand","swap_hands","consume","discard","learn","job","barter","deliver","dispatch","patrol_start","patrol_claim","rebuild_board","recover_archive","marker","unmark","vehicle","repair_vehicle","revive","chest_take","chest_put","chest_all","chest_close"]
 const CONTEXT := ["interaction","building_hit","next_hint","hint","focus_damage","loot_target","loot_time","loot_full","loot_ratio",
 	"search_start","search_slot","search_held","action_lock","reload_id","reload_left","reload_span","heavy_charge","heavy_pending","shape","turn"]
 
@@ -554,7 +555,8 @@ func _invoke(id: String,args: Array) -> void:
 		if args.size()==1 and args[0] is String and args[0].length()<=WastelandSession.CHAT_LENGTH and _spend_budget(state):
 			_as_member(game.session,state,game.session.send_chat.bind(args[0]))
 		return
-	if id in ACTIONS and args.size()<=3 and state.commands.size()<18:
+	var max_args := 4 if id in ["chest_put","chest_take"] else 3
+	if id in ACTIONS and args.size()<=max_args and state.commands.size()<18:
 		if var_to_bytes(args).size()<=1024 and _spend_budget(state):
 			state.commands.append([id,args])
 
@@ -575,6 +577,7 @@ func _pilot(drive: Vector2, yaw: float, pitch: float, held_keys: int, enabled: b
 	if state==null or not _spend_budget(state) or not drive.is_finite() or not is_finite(yaw) or not is_finite(pitch):
 		return
 	state.input={"drive":drive.limit_length(),"yaw":wrapf(yaw,-PI,PI),"pitch":clampf(pitch,-1.49,1.49),"held":held_keys & key_mask,"enabled":enabled,"auto_step":auto_step}
+	state.input.third_person = (held_keys & THIRD_PERSON_HELD_BIT) != 0
 	state.updated_at=Time.get_ticks_msec()
 
 @rpc("any_peer","call_remote","reliable",2)
@@ -647,6 +650,7 @@ func _tick_member(session:WastelandSession,state:MemberState,delta:float)->void:
 			member.rotation.y=float(state.input.yaw)
 			member.pitch=float(state.input.pitch)
 			member.eyes.rotation.x=member.pitch
+			member.third_person=bool(state.input.get("third_person",false))
 		if not nearby and not state.downed and not member.is_knocked_down():
 			var anchor:=_spawn_near_owner(session,state)
 			member.dismount(true)
@@ -678,6 +682,7 @@ func _tick_member(session:WastelandSession,state:MemberState,delta:float)->void:
 		if upright and is_instance_valid(member.mount_vehicle):
 			avatar.pose(delta,0.0,0.0,false,Vector3.INF,false,Vector3.UP,true)
 		if not avatar.visible: return
+		avatar.aim_pitch = member.pitch
 		_avatar_motion(avatar,session.catalog,member.hand.model_id,member.hand.swing_serial,member.hand.shot_serial,int(state.bag.magazine.get(member.hand.model_id,0))>0)
 		member.pose_ground_motion(delta)
 
@@ -778,7 +783,7 @@ func mirror_lake_combat(lake: WastelandLakeWildlife) -> void:
 @rpc("authority","call_remote","reliable",0)
 func _lake_combat(rows: Dictionary) -> void:
 	if not host and is_instance_valid(game.session) and game.session.replica:
-		game.session.stream.lake_wildlife.restore_combat(rows)
+		game.session.stream.lake_wildlife.restore_combat(rows,true)
 
 func mirror_player_hit(person: WastelandSurvivor, impact: Vector3, at: Vector3, bone: StringName) -> void:
 	var owner := member_for(person)
@@ -1215,11 +1220,7 @@ func _manifest(size:int,compressed:PackedByteArray) -> void:
 		_apply_world(game.session,data)
 
 func _apply_world(session:WastelandSession,row:Dictionary) -> void:
-	session.bag.counts=row.bag.counts
-	session.bag.bar=row.bag.bar
-	session.bag.automatic_shortcuts=row.bag.get("automatic_shortcuts",{})
-	session.bag.restore_gear(row.bag)
-	session.bag.magazine=row.bag.magazine
+	session.bag.restore(row.bag,false)
 	session.hand_queue=row.queue
 	for peer:int in row.loadouts:
 		var view:ReplicaMember=replicas.get(peer)
@@ -1258,9 +1259,10 @@ func client_tick(session:WastelandSession,dt:float) -> void:
 	var p:=session.player
 	var can_act := session.controls_enabled and not session.death_screen and not p.is_knocked_down()
 	if can_act:
+		p.read_view_input()
 		p.look(p._stick_look()*Vector2(2.7,-2.16 if session.options.display.invert_y else 2.16)*dt)
 	var buttons:=0
-	var held:=0
+	var held:=THIRD_PERSON_HELD_BIT if p.third_person else 0
 	if can_act:
 		for i in range(KEYS.size()):
 			if Input.is_action_just_pressed(KEYS[i]):
@@ -1282,6 +1284,7 @@ func client_tick(session:WastelandSession,dt:float) -> void:
 	var speed := p.global_position.distance_to(replica_position) / maxf(0.001,dt)
 	p.global_position=p.global_position.lerp(replica_position,1.0 if speed>350.0 else minf(1.0,dt*13.0))
 	var row:=replica_state
+	p.mount_vehicle = session.vehicles.get(str(row.get("ride", "")))
 	p.restore_vitals(row.player)
 	p.hunger=float(row.player.hunger)
 	p.hydration=float(row.player.hydration)
@@ -1300,7 +1303,6 @@ func client_tick(session:WastelandSession,dt:float) -> void:
 	p.guarding=bool(row.member_guard)
 	p.headlamp.visible=p.flashlight and session.bag.offhand!="torch"
 	p.hand.set_offhand(session.bag.offhand,p.guarding,p.flashlight and not p.submerged)
-	preload("res://game/art/offhand_art.gd").sync_world_light(p.camera,session.bag.offhand,p.flashlight and not p.submerged)
 	if row.player.get("profile", p.profile) == p.profile:
 		p.crouch = float(row.player.get("crouch", 0.0))
 		p.stand_shape.height = float(row.player.get("body_height", p.stand_shape.height))
@@ -1333,6 +1335,7 @@ func client_tick(session:WastelandSession,dt:float) -> void:
 	session.audio.sync(session.atmosphere.rain_strength,session.clock.blood(),float(session.stream.water_at(p.global_position)))
 	var held_item:=session.bag.current()
 	p.update_optics(dt,session.controls_enabled and not session.death_screen and session.optics_active())
+	p.sync_view_lantern(session.bag.offhand)
 	p.hand.set_gloves(session.bag.gear.hands=="work_gloves",session.bag.gear.hands=="meme_claws")
 	p.hand.hold(held_item,session.catalog.items.get(held_item,{}))
 	p.hand.set_loaded_arrow(int(session.bag.magazine.get(held_item,0))>0)
@@ -1379,6 +1382,7 @@ func _pose_party(session:WastelandSession,dt:float)->void:
 			continue
 		avatar.set_offhand(row.offhand,row.guard,row.flame)
 		var held:=str(row.held)
+		avatar.aim_pitch = float(row.pitch)
 		_avatar_motion(avatar,session.catalog,held,int(row.swings),int(row.shots),bool(row.loaded))
 		var travel := avatar.global_position - previous
 		var motion := (travel / maxf(dt, 0.001)).limit_length(12.0) if travel.length_squared() < 2.25 else Vector3.ZERO
@@ -1397,6 +1401,7 @@ func _avatar_motion(avatar: WastelandPartyAvatar,catalog: WastelandCatalog,held:
 	if grip == null or grip.get_meta("shown_model","?") == model: return
 	grip.set_meta("held",held)
 	grip.set_meta("shown_model",model)
+	avatar.mainhand_kind = str(catalog.items.get(held,{}).get("kind",""))
 	var mesh := grip.get_node_or_null("HeldItem") as MeshInstance3D
 	if not catalog.items.has(held):
 		if mesh != null:

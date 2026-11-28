@@ -84,14 +84,17 @@ func _start() -> void:
 			if id!=fish_id and lake.drivers.has(id) and lake.drivers[id].get_instance_id()==initial_rigs[id]: continuous+=1
 		_check(not lake.combat_snapshot().has(fish_id) and lake.drivers.has(fish_id) and continuous==5,"offscreen replenishment restores the sixth fish while the five survivors keep their same bodies 150 metres away")
 	_prepare(s,patch)
+	s.bag.assign("",s.bag.active)
 	var survivor := _clear_fish(s,patch)
 	var fish_recovered := false
 	if survivor!="":
 		var fish_rig: Node3D = lake.drivers[survivor]
 		var rids := _joint_rids(fish_rig)
 		var target: Vector3 = patch.fish_poses[patch.fish_ids.find(survivor)].origin
-		var hit := s.weapon_hit(target+Vector3.UP*2.0,target,[])
-		lake.strike(hit,1.0,target+Vector3.UP)
+		var hit := _light_punch(s,survivor,target,2.0)
+		if not hit.is_empty():
+			# Leave a quarter hit point so recovery can be checked independently of death.
+			lake.strike(hit,float(lake.combat.rows[survivor].hp)-0.25,target+Vector3.UP,true)
 		var same_fish: bool = lake.combat.bodies.has(survivor) and _joint_rids(lake.combat.bodies[survivor].rig)==rids
 		_advance(s,1.2)
 		fish_recovered = same_fish and lake.drivers.get(survivor)==fish_rig and _joint_rids(fish_rig)==rids and fish_rig.pose_applied.get_connections().size()==1
@@ -111,11 +114,17 @@ func _start() -> void:
 		_check(driving != null and driving.body_for(distal) != null and driving.find_children("*","RigidBody3D",false,false).size() == specimen.bones.get_bone_count(),"every visible joint follows active physics, including " + distal)
 		if driving != null:
 			var turtle := specimen.species=="pond_turtle"
-			_check(driving.balance.support_enabled!=turtle and specimen.travel_speed>0.0 and (turtle or specimen.basis.y.dot(s.stream.ground_normal_at(specimen.position))>0.96),"live "+specimen.species+" stroke follows travel with swimming or lakebed support")
+			_check(driving.balance.support_enabled==specimen.on_bottom and specimen.travel_speed>0.0 and (turtle or specimen.basis.y.dot(s.stream.ground_normal_at(specimen.position))>0.96),"live "+specimen.species+" stroke follows travel with swimming or lakebed support")
 		var probe := s.weapon_hit(target+Vector3.UP*0.65,target,[])
 		_check(probe.get("aquatic") == id,"weapon ray picks the articulated " + specimen.species)
 		if probe.get("aquatic") == id:
-			s.projectile_hit("bullet",1.0,probe,s.player,target + Vector3.UP)
+			if specimen.species=="crayfish":
+				probe = _light_punch(s,id,target,0.65)
+			if not probe.is_empty():
+				var hp := float(lake.combat.rows.get(id,{}).get("hp",lake.combat.HEALTH[specimen.species]))
+				s.projectile_hit("bullet",1.0,probe,s.player,target+Vector3.UP)
+				_check(lake.drivers.get(id)==driving and not lake.combat.bodies.has(id) and is_equal_approx(lake.combat.rows[id].hp,hp-1.0),specimen.species+" takes a light projectile hit without losing its active joints")
+				lake.strike(probe,float(lake.combat.rows[id].hp)-0.25,target+Vector3.UP,true)
 			_check(lake.combat.bodies.has(id) and lake.combat_snapshot()[id].hp > 0,specimen.species + " survives a hit in a physical knockdown")
 			var same_fallen: bool = lake.combat.bodies.has(id) and _joint_rids(lake.combat.bodies[id].rig)==before_fall
 			_advance(s,2.0)
@@ -126,12 +135,12 @@ func _start() -> void:
 	_prepare(s,patch)
 	await _natural_flight(s,patch)
 	var bird := _joint(patch.upper,"Breast")
-	s.player.camera.global_position = bird+Vector3.UP*1.2
-	s.player.camera.look_at(bird,Vector3.FORWARD)
 	var confirms := s.player.confirmed_hit
 	var heron_rids := _joint_rids(lake.drivers[patch.heron_id])
-	s._melee({},1.0)
+	var bird_hit := _light_punch(s,patch.heron_id,bird,1.2)
 	_check(s.player.confirmed_hit == confirms+1 and lake.combat_snapshot().has(patch.heron_id),"an actual bare-handed swing hits the heron and confirms to the attacker")
+	if not bird_hit.is_empty():
+		lake.strike(bird_hit,float(lake.combat.rows[patch.heron_id].hp)-0.25,bird+Vector3.UP,true)
 	var same_bird: bool = lake.combat.bodies.has(patch.heron_id) and _joint_rids(lake.combat.bodies[patch.heron_id].rig)==heron_rids
 	_advance(s,1.2)
 	_check(same_bird and lake.drivers.has(patch.heron_id) and _joint_rids(lake.drivers[patch.heron_id])==heron_rids,"the landed heron resumes its route with its original physics bodies")
@@ -211,6 +220,26 @@ func _joint_rids(rig: Node3D) -> Array[RID]:
 		for part in rig.get_children():
 			if part is RigidBody3D: result.append(part.get_rid())
 	return result
+
+func _light_punch(s: WastelandSession, id: String, target: Vector3, reach: float) -> Dictionary:
+	var lake := s.stream.lake_wildlife
+	s.player.camera.global_position = target+Vector3.UP*reach
+	s.player.camera.look_at(target,Vector3.FORWARD)
+	var hit := s._trace(2.58,15,false,true,true)
+	var rig: Node3D = lake.drivers.get(id)
+	if hit.get("aquatic")!=id or rig==null:
+		_check(false,"ordinary bare-hand swing reaches "+id)
+		return {}
+	var part: RigidBody3D = rig.body_for(hit.bone)
+	var before := part.linear_velocity
+	var hp := float(lake.combat.rows.get(id,{}).get("hp",lake.combat.HEALTH[hit.kind]))
+	s._melee({},1.0)
+	var row: Dictionary = lake.combat.rows.get(id,{})
+	var local: bool = not row.is_empty() and row.hp>0.0 and row.hp<hp and lake.drivers.get(id)==rig and not lake.combat.bodies.has(id) and not part.linear_velocity.is_equal_approx(before)
+	_check(local,"ordinary bare-hand swing moves the struck joint and leaves "+id+" alive and active")
+	if local and hit.kind in ["crayfish","lake_fish"]:
+		_check(is_equal_approx(hp-row.hp,2.25),"a submerged "+String(hit.kind)+" takes 2.25 damage from an untrained ordinary punch")
+	return hit if local else {}
 
 func _clear_fish(s: WastelandSession, patch: WastelandLakeWildlife.Habitat) -> String:
 	for i in patch.fish_ids.size():
